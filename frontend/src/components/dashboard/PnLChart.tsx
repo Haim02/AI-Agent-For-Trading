@@ -90,9 +90,9 @@ export default function PnLChart() {
                   color: "#e2e8f0",
                   fontSize: 12,
                 }}
-                formatter={(value: number) => [
-                  `$${Number(value).toFixed(2)}`,
-                  "רווח/הפסד",
+                formatter={(value: any) => [
+                  `$${Number(value).toFixed(0)}`,
+                  "P&L",
                 ]}
                 labelFormatter={(label) => `תאריך: ${label}`}
               />
