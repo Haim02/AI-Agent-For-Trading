@@ -15,6 +15,7 @@ from memory.reflection_engine import ReflectionEngine, ReflectionEngineError
 from memory.short_term import ShortTermMemory
 from scrapers.menthorq_scraper import MenthorQScraper
 from services.news_monitor import NewsMonitor
+from services.smart_news_monitor import SmartNewsMonitor
 from services.telegram_service import TelegramService, TelegramServiceError
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,14 @@ EST = ZoneInfo("America/New_York")
 _scheduler: Optional[AsyncIOScheduler] = None
 _telegram: Optional[TelegramService] = None
 _news_monitor: Optional[NewsMonitor] = None
+_smart_monitor: Optional[SmartNewsMonitor] = None
+
+
+def get_smart_news_monitor() -> SmartNewsMonitor:
+    global _smart_monitor
+    if _smart_monitor is None:
+        _smart_monitor = SmartNewsMonitor()
+    return _smart_monitor
 
 
 # ───────────────────────── helpers ─────────────────────────
@@ -192,6 +201,48 @@ async def job_scrape_gex_data() -> None:
         logger.exception("job_scrape_gex_data failed")
 
 
+async def job_smart_news_company() -> None:
+    try:
+        await get_smart_news_monitor().check_company_news()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_smart_news_company failed")
+
+
+async def job_smart_news_macro() -> None:
+    try:
+        await get_smart_news_monitor().check_macro_news()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_smart_news_macro failed")
+
+
+async def job_smart_news_earnings() -> None:
+    try:
+        await get_smart_news_monitor().check_earnings_today()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_smart_news_earnings failed")
+
+
+async def job_smart_news_impact() -> None:
+    try:
+        await get_smart_news_monitor().update_news_impact()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_smart_news_impact failed")
+
+
+async def job_smart_news_learn() -> None:
+    try:
+        await get_smart_news_monitor().learn_from_news()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_smart_news_learn failed")
+
+
+async def job_smart_news_cleanup() -> None:
+    try:
+        await get_smart_news_monitor().cleanup_old_news()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_smart_news_cleanup failed")
+
+
 async def job_daily_summary() -> None:
     try:
         db = get_db()
@@ -310,6 +361,50 @@ def start_scheduler() -> AsyncIOScheduler:
         job_check_iv_spikes,
         CronTrigger(day_of_week="mon-fri", hour="9-15/2", minute=15, timezone=EST),
         id="iv_spikes",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # ───────── Smart news monitor ─────────
+    _scheduler.add_job(
+        job_smart_news_company,
+        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="0,30", timezone=EST),
+        id="news_company",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_smart_news_macro,
+        CronTrigger(hour="6-20", minute=15, timezone=EST),
+        id="news_macro",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_smart_news_earnings,
+        CronTrigger(hour=7, minute=0, timezone=EST),
+        id="news_earnings",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_smart_news_impact,
+        CronTrigger(hour=17, minute=0, timezone=EST),
+        id="news_impact",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_smart_news_learn,
+        CronTrigger(hour=2, minute=0, timezone=EST),
+        id="news_learn",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_smart_news_cleanup,
+        CronTrigger(hour=2, minute=30, timezone=EST),
+        id="news_cleanup",
         replace_existing=True,
         max_instances=1,
     )

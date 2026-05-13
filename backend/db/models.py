@@ -139,3 +139,55 @@ class ConversationSession(BaseModel):
     message_count: int = 0
     topics: list[str] = Field(default_factory=list)
     expires_at: datetime = Field(default_factory=_expiry_30d)
+
+
+# ───────────────────────── news monitor ─────────────────────────
+
+NewsCategory = Literal[
+    "earnings",
+    "analyst",
+    "merger",
+    "geopolitical",
+    "fed",
+    "economic",
+    "company_news",
+    "macro",
+]
+NewsImportance = Literal["high", "medium", "low"]
+NewsSentiment = Literal["bullish", "bearish", "neutral"]
+
+
+def _expiry_7d() -> datetime:
+    return datetime.utcnow() + timedelta(days=7)
+
+
+class NewsItem(BaseModel):
+    """News item with deduplication and impact tracking."""
+
+    news_hash: str
+    headline: str
+    summary: Optional[str] = None
+    source: str
+    url: Optional[str] = None
+
+    category: NewsCategory
+    importance: NewsImportance
+    sentiment: Optional[NewsSentiment] = None
+
+    tickers: list[str] = Field(default_factory=list)
+
+    published_at: datetime
+    sent_to_user_at: Optional[datetime] = None
+
+    price_at_news: dict[str, float] = Field(default_factory=dict)
+    price_after_1d: dict[str, float] = Field(default_factory=dict)
+    price_after_3d: dict[str, float] = Field(default_factory=dict)
+    price_after_7d: dict[str, float] = Field(default_factory=dict)
+
+    impact_score: Optional[float] = None
+
+    agent_analysis: Optional[str] = None
+    confirmed_impact: Optional[str] = None
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime = Field(default_factory=_expiry_7d)

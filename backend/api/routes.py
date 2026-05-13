@@ -530,3 +530,74 @@ async def memory_recall(
     if collection:
         return {"query": q, "results": {collection: ltm.recall(q, collection, n_results=n)}}
     return {"query": q, "results": ltm.recall_all(q, n_results=n)}
+
+
+# ───────────────────────── smart news monitor ─────────────────────────
+
+
+@router.get("/news/recent")
+async def news_recent(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+    db = get_db()
+    cursor = db.news_items.find().sort("sent_to_user_at", -1).limit(limit)
+    docs = await cursor.to_list(length=limit)
+    return [_fix_id(d) for d in docs if d is not None]
+
+
+@router.get("/news/stats")
+async def news_stats() -> dict[str, Any]:
+    db = get_db()
+    total = await db.news_items.count_documents({"sent_to_user_at": {"$ne": None}})
+    pipeline = [
+        {"$match": {"sent_to_user_at": {"$ne": None}}},
+        {
+            "$group": {
+                "_id": "$category",
+                "count": {"$sum": 1},
+                "avg_impact": {"$avg": "$impact_score"},
+            }
+        },
+        {"$sort": {"count": -1}},
+    ]
+    by_category = []
+    async for row in db.news_items.aggregate(pipeline):
+        by_category.append(
+            {
+                "category": row.get("_id"),
+                "count": row.get("count", 0),
+                "avg_impact": (
+                    round(float(row["avg_impact"]), 2) if row.get("avg_impact") is not None else None
+                ),
+            }
+        )
+    return {"total_sent": total, "by_category": by_category}
+
+
+@router.post("/news/trigger")
+async def news_trigger(source: str = Query(default="company")) -> dict[str, Any]:
+    from services.smart_news_monitor import SmartNewsMonitor
+
+    monitor = SmartNewsMonitor()
+    source = (source or "company").lower().strip()
+    try:
+        if source == "company":
+            count = await monitor.check_company_news()
+        elif source == "macro":
+            count = await monitor.check_macro_news()
+        elif source == "earnings":
+            count = await monitor.check_earnings_today()
+        elif source == "all":
+            results = await asyncio.gather(
+                monitor.check_company_news(),
+                monitor.check_macro_news(),
+                monitor.check_earnings_today(),
+                return_exceptions=True,
+            )
+            count = sum(r for r in results if isinstance(r, int))
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"news/trigger failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"source": source, "sent": count}
