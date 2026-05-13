@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+node_modules/
+frontend/node_modules/
+venv/
+backend/venv/
+*.log
+.chromadb/
+backend/data/
+dist/
+build/
+.vite/

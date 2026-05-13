@@ -1,0 +1,11 @@
+version: "3.9"
+services:
+  mongo:
+    image: mongo:7
+    container_name: options_agent_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+volumes:
+  mongo_data:
