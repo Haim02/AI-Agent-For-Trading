@@ -1,4 +1,5 @@
 .env
+.env/
 __pycache__/
 *.pyc
 *.pyo
@@ -13,3 +14,13 @@ backend/data/
 dist/
 build/
 .vite/
+
+
+# python
+__pycache__/
+*.pyc
+.env
+.env.*
+venv/
+env/
+.venv/
