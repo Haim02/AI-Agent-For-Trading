@@ -20,3 +20,4 @@ langchain-anthropic
 langchain-openai
 langgraph
 anthropic
+finnhub-python

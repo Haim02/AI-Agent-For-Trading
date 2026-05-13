@@ -115,7 +115,18 @@ SYSTEM_PROMPT = (
     "1. השתמש ב-research_stock קודם\n"
     "2. אחר כך analyze_ticker לנתונים טכניים\n"
     "3. אחר כך get_gex_levels\n"
-    "4. סכם הכל בעברית"
+    "4. סכם הכל בעברית\n"
+    "\n"
+    "כלים חדשים מ-Finnhub:\n"
+    "- check_earnings: בדוק סיכון Earnings לפני כל פוזיציה\n"
+    "- get_analyst_recommendations: המלצות אנליסטים\n"
+    "- get_stock_news: חדשות ספציפיות למניה\n"
+    "- get_earnings_calendar: לוח דוחות קרובים\n"
+    "- full_ticker_analysis: ניתוח מלא\n"
+    "\n"
+    "חוק חשוב: לפני כל המלצה על Iron Condor או Strangle\n"
+    "תמיד הפעל check_earnings קודם!\n"
+    "אם earnings בפחות מ-14 ימים – אל תמליץ על Short Premium"
 )
 
 

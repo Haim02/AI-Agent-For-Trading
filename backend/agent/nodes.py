@@ -250,6 +250,11 @@ _RESULT_BUCKET = {
     "get_open_positions": "positions",
     "get_market_news": "news",
     "recall_memory": "memory",
+    "check_earnings": "earnings_risk",
+    "get_analyst_recommendations": "analyst_recs",
+    "get_stock_news": "stock_news",
+    "get_earnings_calendar": "earnings_calendar",
+    "full_ticker_analysis": "ticker_analysis",
 }
 
 
@@ -359,6 +364,11 @@ _BUCKET_LABELS = {
     "positions": "פוזיציות פתוחות",
     "news": "חדשות שוק",
     "memory": "זיכרון",
+    "earnings_risk": "סיכון Earnings",
+    "analyst_recs": "המלצות אנליסטים",
+    "stock_news": "חדשות מניה",
+    "earnings_calendar": "לוח Earnings",
+    "ticker_analysis": "ניתוח מלא של מניה",
 }
 
 

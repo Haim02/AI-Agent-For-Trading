@@ -22,6 +22,7 @@ from memory.long_term import LongTermMemory
 from scrapers.finviz_scraper import FinVizScraper
 from services.scanner_service import ScannerService
 from services.telegram_service import TelegramService, TelegramServiceError
+from tools.finnhub_tool import FinnhubTool
 from tools.perplexity_tool import PerplexityTool, PerplexityToolError
 from tools.web_search_tool import WebSearchTool
 from zoneinfo import ZoneInfo
@@ -495,6 +496,85 @@ async def research_stock(ticker: str) -> str:
     return await asyncio.to_thread(WebSearchTool().research_ticker, ticker)
 
 
+# ───────────────────────── Finnhub tools ─────────────────────────
+
+async def check_earnings(ticker: str) -> str:
+    """בודק אם יש earnings קרוב למניה ומעריך את רמת הסיכון לפוזיציה."""
+    ticker = ticker.upper().strip()
+    data = await asyncio.to_thread(FinnhubTool().check_earnings_risk, ticker)
+    if not data:
+        return f"❌ לא ניתן לבדוק Earnings ל-{ticker} כרגע."
+    if not data.get("has_earnings"):
+        return (
+            f"📅 {ticker} – אין דוחות בקרוב\n"
+            f"רמת סיכון: {data.get('risk_level', 'נמוך ✅')}\n"
+            f"{data.get('message', '')}"
+        )
+    return (
+        f"📅 {ticker} – דוחות קרובים\n"
+        f"תאריך: {data.get('date', '—')}\n"
+        f"ימים עד הדוח: {data.get('days_until', '—')}\n"
+        f"רמת סיכון: {data.get('risk_level', '—')}\n"
+        f"{data.get('message', '')}"
+    )
+
+
+async def get_analyst_recommendations(ticker: str) -> str:
+    """מחזיר המלצות אנליסטים למניה."""
+    ticker = ticker.upper().strip()
+    data = await asyncio.to_thread(FinnhubTool().get_recommendation_trends, ticker)
+    if not data:
+        return f"❌ אין המלצות אנליסטים זמינות ל-{ticker}."
+    buy = data.get("strong_buy", 0) + data.get("buy", 0)
+    sell = data.get("strong_sell", 0) + data.get("sell", 0)
+    return (
+        f"👥 המלצות אנליסטים – {ticker}\n"
+        f"תקופה: {data.get('period', '—')}\n"
+        f"🟢 קנייה (Strong Buy + Buy): {buy}\n"
+        f"🟡 המתנה: {data.get('hold', 0)}\n"
+        f"🔴 מכירה (Sell + Strong Sell): {sell}\n"
+        f"סה\"כ אנליסטים: {data.get('total_analysts', 0)}\n"
+        f"קונצנזוס: {data.get('consensus', '—')}"
+    )
+
+
+async def get_stock_news(ticker: str) -> str:
+    """שולף חדשות אחרונות על מניה ספציפית."""
+    ticker = ticker.upper().strip()
+    items = await asyncio.to_thread(FinnhubTool().get_company_news, ticker, 3)
+    if not items:
+        return f"📰 לא נמצאו חדשות אחרונות עבור {ticker}."
+    lines = [f"📰 חדשות אחרונות – {ticker}"]
+    for n in items:
+        when = n.get("datetime") or ""
+        head = n.get("headline") or ""
+        source = n.get("source") or ""
+        lines.append(f"• [{when}] {head} ({source})")
+        summary = (n.get("summary") or "").strip()
+        if summary:
+            lines.append(f"   {summary[:200]}")
+    return "\n".join(lines)
+
+
+async def get_earnings_calendar(_: Optional[dict] = None) -> str:
+    """מציג את לוח הדוחות הקרובים לשבועיים הקרובים."""
+    items = await asyncio.to_thread(FinnhubTool().get_earnings_calendar, 14)
+    if not items:
+        return "📅 לא נמצאו דוחות מתוכננים ב-14 הימים הקרובים."
+    lines = ["📅 לוח Earnings – שבועיים קרובים:"]
+    for e in items:
+        eps = e.get("eps_estimate")
+        eps_text = f"EPS צפי: {eps}" if eps is not None else "EPS צפי: —"
+        lines.append(f"• {e.get('date', '—')} | {e.get('ticker', '—')} | {eps_text}")
+    return "\n".join(lines)
+
+
+async def full_ticker_analysis(ticker: str) -> str:
+    """ניתוח מלא של מניה כולל מחיר, המלצות, חדשות וסיכון Earnings."""
+    ticker = ticker.upper().strip()
+    return await asyncio.to_thread(FinnhubTool().get_full_ticker_analysis, ticker)
+
+
 async def get_iv_rank(ticker: str) -> str:
     """מחשב IV Rank למניה ספציפית ומסביר מה כדאי לעשות."""
     ticker = ticker.upper().strip()
@@ -606,6 +686,31 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
         "research_stock",
         "חוקר מניה ספציפית באינטרנט",
         research_stock,
+    ),
+    "check_earnings": AgentTool(
+        "check_earnings",
+        "בודק אם יש earnings קרוב למניה ומעריך את רמת הסיכון לפוזיציה",
+        check_earnings,
+    ),
+    "get_analyst_recommendations": AgentTool(
+        "get_analyst_recommendations",
+        "מחזיר המלצות אנליסטים למניה",
+        get_analyst_recommendations,
+    ),
+    "get_stock_news": AgentTool(
+        "get_stock_news",
+        "שולף חדשות אחרונות על מניה ספציפית",
+        get_stock_news,
+    ),
+    "get_earnings_calendar": AgentTool(
+        "get_earnings_calendar",
+        "מציג את לוח הדוחות הקרובים לשבועיים הקרובים",
+        get_earnings_calendar,
+    ),
+    "full_ticker_analysis": AgentTool(
+        "full_ticker_analysis",
+        "ניתוח מלא של מניה כולל מחיר, המלצות, חדשות וסיכון Earnings",
+        full_ticker_analysis,
     ),
 }
 
