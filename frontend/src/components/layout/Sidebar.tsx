@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import {
+  BarChart2,
   Calendar,
   LayoutDashboard,
   MessageCircle,
@@ -13,6 +14,7 @@ const NAV_ITEMS = [
   { to: "/journal", label: "יומן", icon: Calendar },
   { to: "/scanner", label: "סורק", icon: Search },
   { to: "/chat", label: "צ'אט", icon: MessageCircle },
+  { to: "/analytics", label: "דשבורד אנליטיקס", icon: BarChart2 },
 ];
 
 export default function Sidebar() {

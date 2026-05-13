@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import BottomNav from "./components/layout/BottomNav";
 import Header from "./components/layout/Header";
 import Sidebar from "./components/layout/Sidebar";
+import Analytics from "./pages/Analytics";
 import Chat from "./pages/Chat";
 import Dashboard from "./pages/Dashboard";
 import Journal from "./pages/Journal";
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="/journal" element={<Journal />} />
             <Route path="/scanner" element={<Scanner />} />
             <Route path="/chat" element={<Chat />} />
+            <Route path="/analytics" element={<Analytics />} />
           </Routes>
         </main>
       </div>

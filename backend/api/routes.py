@@ -29,7 +29,10 @@ from scrapers.menthorq_scraper import MenthorQScraper
 from services.scanner_service import ScannerService
 from tools.perplexity_tool import PerplexityTool, PerplexityToolError
 
+from api.analytics_routes import router as analytics_router  # noqa: E402
+
 router = APIRouter()
+router.include_router(analytics_router)
 
 
 def _fix_id(doc: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:

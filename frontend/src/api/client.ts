@@ -16,8 +16,19 @@ const baseURL =
 
 export const apiClient = axios.create({
   baseURL,
+  timeout: 30000,
   headers: { "Content-Type": "application/json" },
 });
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (!error.response) {
+      console.error("Network Error - Backend unreachable", error.message);
+    }
+    return Promise.reject(error);
+  },
+);
 
 export async function getHealth() {
   const { data } = await apiClient.get("/health");
@@ -124,5 +135,93 @@ export async function getAgentStatus() {
 
 export async function getMemoryProfile() {
   const { data } = await apiClient.get("/memory/profile");
+  return data;
+}
+
+// ───────────────────────── analytics ─────────────────────────
+
+export interface PerformanceMetrics {
+  total_pnl: number;
+  win_rate: number;
+  profit_factor: number;
+  avg_win: number;
+  avg_loss: number;
+  max_drawdown: number;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  best_month?: { month: string; pnl: number } | null;
+  worst_month?: { month: string; pnl: number } | null;
+}
+
+export interface EquityPoint {
+  date: string;
+  daily_pnl: number;
+  cumulative_pnl: number;
+}
+
+export interface StrategyPerformance {
+  strategy: string;
+  trades: number;
+  win_rate: number;
+  avg_pnl: number;
+  total_pnl: number;
+}
+
+export interface MonthlyPoint {
+  month: string;
+  pnl: number;
+  trades: number;
+  win_rate: number;
+}
+
+export interface HeatmapCell {
+  year: number;
+  week: number;
+  weekday: number;
+  pnl: number;
+  trades: number;
+}
+
+export interface BestWorstTrade {
+  id: string;
+  ticker?: string;
+  strategy?: string;
+  entry_date?: string | null;
+  exit_date?: string | null;
+  pnl: number;
+  dte?: number | null;
+}
+
+export async function getAnalyticsPerformance() {
+  const { data } = await apiClient.get<PerformanceMetrics>("/analytics/performance");
+  return data;
+}
+
+export async function getAnalyticsEquityCurve() {
+  const { data } = await apiClient.get<EquityPoint[]>("/analytics/equity-curve");
+  return data;
+}
+
+export async function getAnalyticsByStrategy() {
+  const { data } = await apiClient.get<StrategyPerformance[]>("/analytics/by-strategy");
+  return data;
+}
+
+export async function getAnalyticsMonthly() {
+  const { data } = await apiClient.get<MonthlyPoint[]>("/analytics/monthly");
+  return data;
+}
+
+export async function getAnalyticsHeatmap() {
+  const { data } = await apiClient.get<HeatmapCell[]>("/analytics/heatmap");
+  return data;
+}
+
+export async function getAnalyticsBestWorst() {
+  const { data } = await apiClient.get<{
+    best: BestWorstTrade[];
+    worst: BestWorstTrade[];
+  }>("/analytics/best-worst");
   return data;
 }

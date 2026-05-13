@@ -22,8 +22,11 @@ from memory.long_term import LongTermMemory
 from scrapers.finviz_scraper import FinVizScraper
 from services.scanner_service import ScannerService
 from services.telegram_service import TelegramService, TelegramServiceError
+from tools.fear_greed_tool import FearGreedTool
 from tools.finnhub_tool import FinnhubTool
+from tools.macro_tool import MacroTool
 from tools.perplexity_tool import PerplexityTool, PerplexityToolError
+from tools.reddit_sentiment_tool import RedditSentimentTool
 from tools.web_search_tool import WebSearchTool
 from zoneinfo import ZoneInfo
 
@@ -575,6 +578,63 @@ async def full_ticker_analysis(ticker: str) -> str:
     return await asyncio.to_thread(FinnhubTool().get_full_ticker_analysis, ticker)
 
 
+# ───────────────────────── macro / sentiment tools ─────────────────────────
+
+async def get_fear_greed(_: Optional[dict] = None) -> str:
+    """מחזיר מדד הפחד והחמדנות של השוק."""
+    data = await asyncio.to_thread(FearGreedTool().get_fear_greed_index)
+    if not data:
+        return "😶 לא ניתן לשלוף את מדד הפחד והחמדנות כרגע."
+    return (
+        "📊 Fear & Greed Index\n"
+        f"ציון: {data.get('score', '—')}/100\n"
+        f"מצב: {data.get('hebrew_rating', '—')} ({data.get('rating', '—')})\n"
+        f"💡 משמעות: {data.get('strategy_implication', '—')}"
+    )
+
+
+async def get_macro_overview(_: Optional[dict] = None) -> str:
+    """מצב מאקרו כלכלי – VIX, דולר, זהב, נפט."""
+    return await asyncio.to_thread(MacroTool().get_market_summary)
+
+
+async def get_econ_calendar(_: Optional[dict] = None) -> str:
+    """אירועים כלכליים השבוע שישפיעו על השוק."""
+    events = await asyncio.to_thread(MacroTool().get_economic_calendar)
+    if not events:
+        return "📅 לא נמצאו אירועים כלכליים בולטים השבוע."
+    lines = ["📅 אירועים כלכליים השבוע:"]
+    for ev in events:
+        actual = ev.get("actual")
+        estimate = ev.get("estimate")
+        prev = ev.get("previous")
+        lines.append(
+            f"• {ev.get('date', '—')} | {ev.get('event', '—')} | השפעה: {ev.get('impact', '—')}\n"
+            f"   צפי: {estimate if estimate is not None else '—'} | "
+            f"בפועל: {actual if actual is not None else '—'} | "
+            f"קודם: {prev if prev is not None else '—'}"
+        )
+    return "\n".join(lines)
+
+
+async def get_reddit_sentiment(_: Optional[dict] = None) -> str:
+    """מניות טרנדיות ברדיט וסנטימנט."""
+    trending = await asyncio.to_thread(RedditSentimentTool().get_trending_tickers)
+    if not trending:
+        return "💬 לא נמצאו מניות טרנדיות ברדיט כרגע."
+    lines = ["💬 מניות טרנדיות ברדיט:"]
+    for item in trending:
+        emoji = (
+            "🟢" if item["sentiment"] == "bullish"
+            else "🔴" if item["sentiment"] == "bearish"
+            else "🟡"
+        )
+        lines.append(
+            f"• {item['ticker']} – {item['mentions']} אזכורים {emoji} ({item['sentiment']})"
+        )
+    return "\n".join(lines)
+
+
 async def get_iv_rank(ticker: str) -> str:
     """מחשב IV Rank למניה ספציפית ומסביר מה כדאי לעשות."""
     ticker = ticker.upper().strip()
@@ -711,6 +771,26 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
         "full_ticker_analysis",
         "ניתוח מלא של מניה כולל מחיר, המלצות, חדשות וסיכון Earnings",
         full_ticker_analysis,
+    ),
+    "get_fear_greed": AgentTool(
+        "get_fear_greed",
+        "מחזיר מדד הפחד והחמדנות של השוק",
+        get_fear_greed,
+    ),
+    "get_macro_overview": AgentTool(
+        "get_macro_overview",
+        "מצב מאקרו כלכלי – VIX, דולר, זהב, נפט",
+        get_macro_overview,
+    ),
+    "get_reddit_sentiment": AgentTool(
+        "get_reddit_sentiment",
+        "מניות טרנדיות ברדיט וסנטימנט",
+        get_reddit_sentiment,
+    ),
+    "get_econ_calendar": AgentTool(
+        "get_econ_calendar",
+        "אירועים כלכליים השבוע שישפיעו על השוק",
+        get_econ_calendar,
     ),
 }
 
