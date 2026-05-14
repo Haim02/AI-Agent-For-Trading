@@ -368,6 +368,40 @@ class IVRankCalculator:
             "market_summary": market_summary,
         }
 
+    async def calculate_iv_rank_async(self, ticker: str) -> dict:
+        """Massive-first IV rank. Falls back to yfinance-based ``calculate_iv_rank``."""
+        if os.getenv("MASSIVE_API_KEY"):
+            from tools.massive_tool import MassiveTool
+
+            massive = MassiveTool()
+            try:
+                data = await massive.get_precise_iv_rank(ticker)
+                if data:
+                    logger.info("Using Massive IV rank for %s", ticker)
+                    return data
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Massive IV rank failed for %s: %s – using yfinance", ticker, exc
+                )
+            finally:
+                await massive.close()
+
+        import asyncio as _asyncio  # local alias to avoid double-import in tests
+
+        result = await _asyncio.to_thread(self.calculate_iv_rank, ticker)
+        if result is None:
+            return {}
+        return {
+            "ticker": result.ticker,
+            "current_iv": result.current_iv,
+            "iv_52w_high": result.iv_52w_high,
+            "iv_52w_low": result.iv_52w_low,
+            "iv_rank": result.iv_rank,
+            "signal": result.signal,
+            "signal_strength": result.signal_strength,
+            "source": "yfinance",
+        }
+
     @staticmethod
     def _get_spot(tk: yf.Ticker) -> float:
         try:

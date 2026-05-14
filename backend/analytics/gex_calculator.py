@@ -1,11 +1,14 @@
+import asyncio
 import logging
 import math
+import os
 from datetime import datetime
 from typing import Optional
 
 import yfinance as yf
 
 from scrapers.menthorq_scraper import GEXData
+from tools.massive_tool import MassiveTool
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +259,33 @@ class GEXCalculator:
             return 0.02
         days = max((target - datetime.utcnow()).days, 1)
         return days / 365.0
+
+    async def calculate_gex_async(self, ticker: str = "SPX") -> dict:
+        """Massive-first GEX. Falls back to yfinance-based ``calculate_gex``."""
+        if os.getenv("MASSIVE_API_KEY"):
+            massive = MassiveTool()
+            try:
+                data = await massive.calculate_precise_gex(ticker)
+                if data:
+                    logger.info("Using Massive GEX for %s", ticker)
+                    return data
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Massive GEX failed for %s: %s – using yfinance", ticker, exc)
+            finally:
+                await massive.close()
+
+        gex = await asyncio.to_thread(self.calculate_gex, ticker)
+        return {
+            "ticker": gex.ticker,
+            "spot_price": gex.spot_price,
+            "gex_total": gex.gex_total,
+            "gamma_flip": gex.gamma_flip_level,
+            "call_wall": gex.call_wall,
+            "put_wall": gex.put_wall,
+            "regime": gex.regime,
+            "top_strikes": gex.top_gex_strikes,
+            "source": "yfinance",
+        }
 
     @staticmethod
     def _find_gamma_flip(per_strike: dict[float, float], spot_price: float) -> float:

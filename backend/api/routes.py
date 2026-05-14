@@ -683,3 +683,56 @@ async def news_trigger(source: str = Query(default="company")) -> dict[str, Any]
         logger.error(f"news/trigger failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
     return {"source": source, "sent": count}
+
+
+# ───────────────────────── Massive API endpoints ─────────────────────────
+
+
+async def _with_massive(coro_factory) -> Any:
+    from tools.massive_tool import MassiveTool
+
+    massive = MassiveTool()
+    try:
+        return await coro_factory(massive)
+    finally:
+        await massive.close()
+
+
+@router.get("/massive/quote/{ticker}")
+async def massive_quote(ticker: str) -> dict[str, Any]:
+    ticker = ticker.upper().strip()
+    return await _with_massive(lambda m: m.get_stock_quote(ticker))
+
+
+@router.get("/massive/options-chain/{ticker}")
+async def massive_options_chain(
+    ticker: str,
+    expiration: Optional[str] = Query(default=None),
+) -> dict[str, Any]:
+    ticker = ticker.upper().strip()
+    return await _with_massive(lambda m: m.get_options_chain(ticker, expiration))
+
+
+@router.get("/massive/options-flow/{ticker}")
+async def massive_options_flow(ticker: str) -> dict[str, Any]:
+    ticker = ticker.upper().strip()
+    return await _with_massive(lambda m: m.get_options_flow(ticker))
+
+
+@router.get("/massive/unusual")
+async def massive_unusual(
+    min_volume: int = Query(default=1000, ge=1),
+) -> list[dict[str, Any]]:
+    return await _with_massive(lambda m: m.get_unusual_options_activity(min_volume))
+
+
+@router.get("/massive/gex/{ticker}")
+async def massive_gex(ticker: str) -> dict[str, Any]:
+    ticker = ticker.upper().strip()
+    return await _with_massive(lambda m: m.calculate_precise_gex(ticker))
+
+
+@router.get("/massive/iv-rank/{ticker}")
+async def massive_iv_rank(ticker: str) -> dict[str, Any]:
+    ticker = ticker.upper().strip()
+    return await _with_massive(lambda m: m.get_precise_iv_rank(ticker))

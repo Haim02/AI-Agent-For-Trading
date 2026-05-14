@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -9,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent.autonomous_agent import get_autonomous_agent
 from api.routes import router as api_router
 from db.connection import close as close_db, ping
+from services.massive_realtime import MassiveRealtimeMonitor
 from services.scheduler import start_scheduler, stop_scheduler
 from services.telegram_bot import start_bot, stop_bot
 
@@ -47,9 +50,29 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         logger.exception("Failed to start Telegram bot")
 
+    massive_monitor: Optional[MassiveRealtimeMonitor] = None
+    massive_task: Optional[asyncio.Task] = None
+    if os.getenv("MASSIVE_API_KEY"):
+        try:
+            massive_monitor = MassiveRealtimeMonitor()
+            massive_task = asyncio.create_task(massive_monitor.connect_and_monitor())
+            logger.info("📡 Massive realtime monitor started")
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to start Massive realtime monitor")
+    else:
+        logger.info("MASSIVE_API_KEY not set – skipping Massive realtime monitor")
+
     yield
 
     logger.info("Shutting down Options Agent API ...")
+    if massive_monitor is not None and massive_task is not None:
+        massive_monitor.running = False
+        massive_task.cancel()
+        try:
+            await massive_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
     try:
         await stop_bot()
     except Exception:  # noqa: BLE001

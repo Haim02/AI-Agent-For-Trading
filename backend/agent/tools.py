@@ -25,6 +25,7 @@ from services.telegram_service import TelegramService, TelegramServiceError
 from tools.fear_greed_tool import FearGreedTool
 from tools.finnhub_tool import FinnhubTool
 from tools.macro_tool import MacroTool
+from tools.massive_tool import MassiveTool
 from tools.perplexity_tool import PerplexityTool, PerplexityToolError
 from tools.reddit_sentiment_tool import RedditSentimentTool
 from tools.web_search_tool import WebSearchTool
@@ -617,6 +618,100 @@ async def get_econ_calendar(_: Optional[dict] = None) -> str:
     return "\n".join(lines)
 
 
+async def get_unusual_options(min_volume: int = 1000) -> str:
+    """מחזיר פעילות אופציות חריגה - איפה הכסף הגדול נכנס היום."""
+    massive = MassiveTool()
+    try:
+        trades = await massive.get_unusual_options_activity(min_volume=int(min_volume))
+    finally:
+        await massive.close()
+    if not trades:
+        return "🤷 לא נמצאה פעילות אופציות חריגה כרגע."
+    lines = ["🚨 פעילות אופציות חריגה (Top 10):"]
+    for i, t in enumerate(trades[:10], start=1):
+        opt_type = t.get("type", "")
+        emoji = "🟢" if opt_type == "call" else "🔴" if opt_type == "put" else "⚪"
+        premium = float(t.get("premium", 0) or 0)
+        size = int(t.get("size", 0) or 0)
+        lines.append(
+            f"{i}. {emoji} ${t.get('ticker', '?')} – {opt_type.upper()} ${t.get('strike', '?')} "
+            f"פקיעה {t.get('expiration', '?')}\n"
+            f"   🔢 גודל: {size:,} | 💰 פרמיה: ${premium:,.0f}"
+        )
+    return "\n".join(lines)
+
+
+async def get_options_flow(ticker: str) -> str:
+    """מציג תזרים אופציות בזמן אמת למניה ספציפית."""
+    ticker = (ticker or "").upper().strip()
+    if not ticker:
+        return "❌ חסר ticker."
+    massive = MassiveTool()
+    try:
+        data = await massive.get_options_flow(ticker)
+    finally:
+        await massive.close()
+    if not data:
+        return f"📊 אין נתוני תזרים אופציות עבור {ticker} כרגע."
+    sentiment_he = {
+        "bullish": "🟢 שורי",
+        "bearish": "🔴 דובי",
+        "neutral": "🟡 ניטרלי",
+    }.get(data.get("sentiment", "neutral"), "🟡 ניטרלי")
+    largest = data.get("largest_trade") or {}
+    largest_text = (
+        f"{largest.get('type', '?').upper()} ${largest.get('strike', '?')} "
+        f"גודל {largest.get('size', '?')} פרמיה ${float(largest.get('premium', 0) or 0):,.0f}"
+        if largest
+        else "—"
+    )
+    return (
+        f"📊 תזרים אופציות – {ticker}\n"
+        f"סנטימנט: {sentiment_he}\n"
+        f"🟢 Calls Volume: {data.get('calls_volume', 0):,}\n"
+        f"🔴 Puts Volume: {data.get('puts_volume', 0):,}\n"
+        f"יחס C/P: {data.get('call_put_ratio', 0)}\n"
+        f"סך עסקאות: {data.get('total_trades', 0)}\n"
+        f"⭐ עסקה גדולה: {largest_text}"
+    )
+
+
+async def get_real_greeks(option_symbol: str) -> str:
+    """מחזיר Greeks מדויקים לאופציה ספציפית (Massive)."""
+    symbol = (option_symbol or "").strip()
+    if not symbol:
+        return "❌ חסר option_symbol."
+    massive = MassiveTool()
+    try:
+        data = await massive.get_option_quote(symbol)
+    finally:
+        await massive.close()
+    if not data or data.get("last") is None:
+        return f"❌ אין נתוני Greeks עבור {symbol}."
+
+    def _fmt(value, suffix: str = "") -> str:
+        if value is None:
+            return "—"
+        try:
+            return f"{float(value):.4f}{suffix}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    iv = data.get("iv")
+    iv_pct = f"{float(iv) * 100:.2f}%" if isinstance(iv, (int, float)) else "—"
+    return (
+        f"🔬 Greeks – {symbol}\n"
+        f"💰 Bid/Ask/Last: {data.get('bid', '—')} / {data.get('ask', '—')} / {data.get('last', '—')}\n"
+        f"📊 Volume: {data.get('volume', '—')} | OI: {data.get('open_interest', '—')}\n"
+        f"🌪 IV: {iv_pct}\n"
+        f"📈 Delta: {_fmt(data.get('delta'))} (כיוון מול ספוט)\n"
+        f"📐 Gamma: {_fmt(data.get('gamma'))} (קצב שינוי בדלתא)\n"
+        f"⏳ Theta: {_fmt(data.get('theta'))} (דעיכה זמנית ליום)\n"
+        f"🌬 Vega: {_fmt(data.get('vega'))} (רגישות ל-IV)\n"
+        f"🏦 Rho: {_fmt(data.get('rho'))} (רגישות לריבית)"
+    )
+
+
 async def recommend_stocks(_: Optional[dict] = None) -> str:
     """ממליץ על מניות איכותיות במגמה עולה לפי הסריקה היומית."""
     db = get_db()
@@ -857,6 +952,21 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
         "get_learned_patterns",
         "מציג דפוסים שהסוכן למד מהתחזיות הקודמות",
         get_learned_patterns,
+    ),
+    "get_unusual_options": AgentTool(
+        "get_unusual_options",
+        "מחזיר פעילות אופציות חריגה - איפה הכסף הגדול נכנס היום",
+        get_unusual_options,
+    ),
+    "get_options_flow": AgentTool(
+        "get_options_flow",
+        "מציג תזרים אופציות בזמן אמת למניה ספציפית",
+        get_options_flow,
+    ),
+    "get_real_greeks": AgentTool(
+        "get_real_greeks",
+        "מחזיר Greeks מדויקים לאופציה ספציפית",
+        get_real_greeks,
     ),
 }
 

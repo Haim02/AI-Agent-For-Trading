@@ -280,6 +280,51 @@ async def job_cleanup_analyses() -> None:
         logger.exception("job_cleanup_analyses failed")
 
 
+async def job_monitor_unusual_options() -> None:
+    if not _is_market_hours():
+        return
+    from tools.massive_tool import MassiveTool
+
+    massive = MassiveTool()
+    if not massive.enabled:
+        await massive.close()
+        return
+    try:
+        trades = await massive.get_unusual_options_activity(min_volume=2500)
+    except Exception:  # noqa: BLE001
+        logger.exception("job_monitor_unusual_options failed")
+        await massive.close()
+        return
+    finally:
+        # close after fetching – fresh client every job run
+        pass
+
+    await massive.close()
+
+    if not trades:
+        return
+    tg = _telegram_service()
+    if tg is None:
+        return
+    lines = ["🚨 פעילות אופציות חריגה:"]
+    for t in trades[:5]:
+        opt_type = t.get("type", "")
+        emoji = "🟢" if opt_type == "call" else "🔴"
+        premium = float(t.get("premium", 0) or 0)
+        lines.append(
+            f"{emoji} ${t.get('ticker', '?')} {opt_type.upper()} "
+            f"${t.get('strike', '?')} – ${premium:,.0f}"
+        )
+    try:
+        await tg.send_alert(
+            title="פעילות אופציות חריגה",
+            body="\n".join(lines),
+            urgency="high",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("unusual_options telegram send failed")
+
+
 async def job_daily_summary() -> None:
     try:
         db = get_db()
@@ -472,6 +517,13 @@ def start_scheduler() -> AsyncIOScheduler:
         job_cleanup_analyses,
         CronTrigger(day=1, hour=3, minute=0, timezone=EST),
         id="cleanup_analyses",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_monitor_unusual_options,
+        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="*/15", timezone=EST),
+        id="unusual_options",
         replace_existing=True,
         max_instances=1,
     )
