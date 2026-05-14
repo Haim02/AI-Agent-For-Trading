@@ -14,6 +14,7 @@ from memory.long_term import LongTermMemory
 from memory.reflection_engine import ReflectionEngine, ReflectionEngineError
 from memory.short_term import ShortTermMemory
 from scrapers.menthorq_scraper import MenthorQScraper
+from services.daily_stock_scanner import DailyStockScanner
 from services.news_monitor import NewsMonitor
 from services.smart_news_monitor import SmartNewsMonitor
 from services.telegram_service import TelegramService, TelegramServiceError
@@ -26,6 +27,7 @@ _scheduler: Optional[AsyncIOScheduler] = None
 _telegram: Optional[TelegramService] = None
 _news_monitor: Optional[NewsMonitor] = None
 _smart_monitor: Optional[SmartNewsMonitor] = None
+_stock_scanner: Optional[DailyStockScanner] = None
 
 
 def get_smart_news_monitor() -> SmartNewsMonitor:
@@ -33,6 +35,13 @@ def get_smart_news_monitor() -> SmartNewsMonitor:
     if _smart_monitor is None:
         _smart_monitor = SmartNewsMonitor()
     return _smart_monitor
+
+
+def get_daily_stock_scanner() -> DailyStockScanner:
+    global _stock_scanner
+    if _stock_scanner is None:
+        _stock_scanner = DailyStockScanner()
+    return _stock_scanner
 
 
 # ───────────────────────── helpers ─────────────────────────
@@ -243,6 +252,34 @@ async def job_smart_news_cleanup() -> None:
         logger.exception("job_smart_news_cleanup failed")
 
 
+async def job_daily_stock_scan() -> None:
+    try:
+        await get_daily_stock_scanner().run_daily_scan()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_daily_stock_scan failed")
+
+
+async def job_update_predictions() -> None:
+    try:
+        await get_daily_stock_scanner().update_predictions()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_update_predictions failed")
+
+
+async def job_learn_patterns() -> None:
+    try:
+        await get_daily_stock_scanner().learn_patterns()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_learn_patterns failed")
+
+
+async def job_cleanup_analyses() -> None:
+    try:
+        await get_daily_stock_scanner().cleanup_old_analyses()
+    except Exception:  # noqa: BLE001
+        logger.exception("job_cleanup_analyses failed")
+
+
 async def job_daily_summary() -> None:
     try:
         db = get_db()
@@ -405,6 +442,36 @@ def start_scheduler() -> AsyncIOScheduler:
         job_smart_news_cleanup,
         CronTrigger(hour=2, minute=30, timezone=EST),
         id="news_cleanup",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # ───────── Daily stock scanner ─────────
+    _scheduler.add_job(
+        job_daily_stock_scan,
+        CronTrigger(day_of_week="mon-fri", hour=9, minute=30, timezone=EST),
+        id="daily_stock_scan",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_update_predictions,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=EST),
+        id="update_predictions",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_learn_patterns,
+        CronTrigger(day_of_week="sun", hour=2, minute=0, timezone=EST),
+        id="learn_patterns",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
+        job_cleanup_analyses,
+        CronTrigger(day=1, hour=3, minute=0, timezone=EST),
+        id="cleanup_analyses",
         replace_existing=True,
         max_instances=1,
     )

@@ -161,6 +161,74 @@ def _expiry_7d() -> datetime:
     return datetime.utcnow() + timedelta(days=7)
 
 
+def _expiry_30d_stocks() -> datetime:
+    return datetime.utcnow() + timedelta(days=30)
+
+
+TrendClassification = Literal[
+    "strong_uptrend",
+    "uptrend",
+    "sideways",
+    "downtrend",
+    "strong_downtrend",
+]
+StockRecommendation = Literal["strong_buy", "buy", "hold", "watch", "skip"]
+
+
+class StockAnalysis(BaseModel):
+    """Daily stock analysis with full data + learning."""
+
+    ticker: str
+    analysis_date: datetime
+
+    found_on_screener: bool = True
+    screener_url: str
+
+    price: float
+    change_pct: float
+    volume: int
+    rel_volume: float
+    rsi: Optional[float] = None
+    sma_20: Optional[float] = None
+    sma_50: Optional[float] = None
+    sma_200: Optional[float] = None
+    high_52w: Optional[float] = None
+    distance_from_52w_high: Optional[float] = None
+
+    trend: TrendClassification
+    trend_strength: float
+
+    market_cap: Optional[str] = None
+    pe: Optional[float] = None
+    eps_growth: Optional[float] = None
+    sector: Optional[str] = None
+
+    iv_rank: Optional[float] = None
+    iv_percentile: Optional[float] = None
+    has_options: bool = True
+
+    recent_news: list[dict[str, Any]] = Field(default_factory=list)
+    catalysts: list[str] = Field(default_factory=list)
+
+    news_impact_analysis: Optional[str] = None
+
+    quality_score: float = 0
+    recommendation: StockRecommendation
+    recommendation_reason: Optional[str] = None
+
+    suggested_strategy: Optional[str] = None
+    suggested_strikes: Optional[dict[str, Any]] = None
+
+    price_after_24h: Optional[float] = None
+    price_after_48h: Optional[float] = None
+    price_after_7d: Optional[float] = None
+    actual_move_pct: Optional[float] = None
+    prediction_correct: Optional[bool] = None
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime = Field(default_factory=_expiry_30d_stocks)
+
+
 class NewsItem(BaseModel):
     """News item with deduplication and impact tracking."""
 

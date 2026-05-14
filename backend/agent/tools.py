@@ -617,6 +617,62 @@ async def get_econ_calendar(_: Optional[dict] = None) -> str:
     return "\n".join(lines)
 
 
+async def recommend_stocks(_: Optional[dict] = None) -> str:
+    """ממליץ על מניות איכותיות במגמה עולה לפי הסריקה היומית."""
+    db = get_db()
+    start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    cursor = (
+        db.stock_analyses.find(
+            {
+                "analysis_date": {"$gte": start_of_day},
+                "recommendation": {"$in": ["strong_buy", "buy"]},
+            }
+        )
+        .sort("quality_score", -1)
+        .limit(5)
+    )
+    docs = await cursor.to_list(length=5)
+    if not docs:
+        return "🤷 אין כרגע מניות מומלצות מהסריקה היומית. נסה אחרי 09:30 EST."
+
+    lines = ["🏆 מניות מומלצות (סריקה יומית):"]
+    for i, doc in enumerate(docs, start=1):
+        catalysts = ", ".join(doc.get("catalysts") or []) or "אין"
+        iv_rank = doc.get("iv_rank")
+        iv_text = f"{iv_rank:.0f}" if isinstance(iv_rank, (int, float)) else "—"
+        lines.append(
+            f"{i}. {doc.get('ticker', '?')} – ציון {doc.get('quality_score', 0)}/100 "
+            f"| {doc.get('recommendation', '?')}\n"
+            f"   💰 ${doc.get('price', 0):.2f} ({doc.get('change_pct', 0):+.2f}%) | "
+            f"IV Rank: {iv_text}\n"
+            f"   📊 מגמה: {doc.get('trend', '—')} | קטליסטים: {catalysts}\n"
+            f"   💡 אסטרטגיה: {doc.get('suggested_strategy') or '—'}\n"
+            f"   📝 {doc.get('recommendation_reason') or '—'}"
+        )
+    return "\n\n".join(lines)
+
+
+async def get_learned_patterns(_: Optional[dict] = None) -> str:
+    """מציג דפוסים שהסוכן למד מהתחזיות הקודמות."""
+    def _recall() -> dict:
+        ltm = LongTermMemory()
+        return ltm.recall("דפוס מנצח", "market_patterns", n_results=5)
+
+    try:
+        results = await asyncio.to_thread(_recall)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("get_learned_patterns failed")
+        return f"❌ לא ניתן לשלוף דפוסים: {exc}"
+
+    if not results:
+        return "📚 אין דפוסים שמורים עדיין – הסוכן עוד לומד."
+    lines = ["🎓 דפוסים שנלמדו מתחזיות עבר:"]
+    for idx, item in enumerate(results[:5], start=1):
+        content = item.get("content") or item.get("document") or str(item)
+        lines.append(f"\n{idx}. {content}")
+    return "\n".join(lines)
+
+
 async def get_reddit_sentiment(_: Optional[dict] = None) -> str:
     """מניות טרנדיות ברדיט וסנטימנט."""
     trending = await asyncio.to_thread(RedditSentimentTool().get_trending_tickers)
@@ -791,6 +847,16 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
         "get_econ_calendar",
         "אירועים כלכליים השבוע שישפיעו על השוק",
         get_econ_calendar,
+    ),
+    "recommend_stocks": AgentTool(
+        "recommend_stocks",
+        "ממליץ על מניות איכותיות במגמה עולה לפי הסריקה היומית",
+        recommend_stocks,
+    ),
+    "get_learned_patterns": AgentTool(
+        "get_learned_patterns",
+        "מציג דפוסים שהסוכן למד מהתחזיות הקודמות",
+        get_learned_patterns,
     ),
 }
 

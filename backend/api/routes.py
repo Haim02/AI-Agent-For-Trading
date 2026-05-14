@@ -572,6 +572,88 @@ async def news_stats() -> dict[str, Any]:
     return {"total_sent": total, "by_category": by_category}
 
 
+@router.get("/scanner/daily-stocks")
+async def scanner_daily_stocks(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+    db = get_db()
+    start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    cursor = (
+        db.stock_analyses.find({"analysis_date": {"$gte": start_of_day}})
+        .sort("quality_score", -1)
+        .limit(limit)
+    )
+    docs = await cursor.to_list(length=limit)
+    return [_fix_id(d) for d in docs if d is not None]
+
+
+@router.get("/scanner/learning-stats")
+async def scanner_learning_stats() -> dict[str, Any]:
+    db = get_db()
+    base_filter = {"prediction_correct": {"$ne": None}, "actual_move_pct": {"$ne": None}}
+    total = await db.stock_analyses.count_documents(base_filter)
+    correct = await db.stock_analyses.count_documents(
+        {**base_filter, "prediction_correct": True}
+    )
+    accuracy = round((correct / total) * 100.0, 2) if total else 0.0
+
+    winners_pipeline = [
+        {"$match": {"actual_move_pct": {"$gt": 0}}},
+        {"$group": {"_id": None, "avg": {"$avg": "$actual_move_pct"}}},
+    ]
+    losers_pipeline = [
+        {"$match": {"actual_move_pct": {"$lt": 0}}},
+        {"$group": {"_id": None, "avg": {"$avg": "$actual_move_pct"}}},
+    ]
+    win_agg = await db.stock_analyses.aggregate(winners_pipeline).to_list(length=1)
+    lose_agg = await db.stock_analyses.aggregate(losers_pipeline).to_list(length=1)
+    avg_winner = round(float(win_agg[0]["avg"]), 2) if win_agg else 0.0
+    avg_loser = round(float(lose_agg[0]["avg"]), 2) if lose_agg else 0.0
+
+    pattern_pipeline = [
+        {"$match": {"prediction_correct": True, "actual_move_pct": {"$ne": None}}},
+        {
+            "$group": {
+                "_id": {"trend": "$trend", "catalysts": "$catalysts"},
+                "count": {"$sum": 1},
+                "avg_move": {"$avg": "$actual_move_pct"},
+            }
+        },
+        {"$match": {"count": {"$gte": 3}}},
+        {"$sort": {"avg_move": -1}},
+        {"$limit": 5},
+    ]
+    best_patterns: list[dict[str, Any]] = []
+    async for row in db.stock_analyses.aggregate(pattern_pipeline):
+        best_patterns.append(
+            {
+                "trend": (row.get("_id") or {}).get("trend"),
+                "catalysts": (row.get("_id") or {}).get("catalysts") or [],
+                "sample_size": row.get("count", 0),
+                "avg_move": round(float(row.get("avg_move") or 0.0), 2),
+            }
+        )
+
+    return {
+        "total_predictions": total,
+        "correct_predictions": correct,
+        "accuracy_pct": accuracy,
+        "best_patterns": best_patterns,
+        "avg_winner_move": avg_winner,
+        "avg_loser_move": avg_loser,
+    }
+
+
+@router.post("/scanner/trigger-scan")
+async def scanner_trigger_scan() -> dict[str, Any]:
+    from services.daily_stock_scanner import DailyStockScanner
+
+    try:
+        analyses = await DailyStockScanner().run_daily_scan()
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"trigger-scan failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"analyzed": len(analyses)}
+
+
 @router.post("/news/trigger")
 async def news_trigger(source: str = Query(default="company")) -> dict[str, Any]:
     from services.smart_news_monitor import SmartNewsMonitor
