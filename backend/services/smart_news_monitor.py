@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
+
+from anthropic import Anthropic
 
 from db.connection import get_db
 from memory.long_term import LongTermMemory
@@ -18,28 +21,59 @@ from tools.perplexity_tool import PerplexityTool, PerplexityToolError
 logger = logging.getLogger(__name__)
 
 
-CATEGORY_EMOJI = {
-    "earnings": "📊",
-    "analyst": "👥",
-    "merger": "🤝",
-    "geopolitical": "🌍",
-    "fed": "🏛️",
-    "economic": "📈",
-    "company_news": "🏢",
-    "macro": "💼",
+IMPORTANCE_LABELS = {
+    "high": "🔴 חשוב מאוד",
+    "medium": "🟡 חשוב",
+    "low": "🟢 מידע",
 }
 
-SENTIMENT_EMOJI = {
-    "bullish": "🟢 חיובי",
-    "bearish": "🔴 שלילי",
-    "neutral": "🟡 ניטרלי",
+CATEGORY_LABELS = {
+    "earnings": "📊 דוחות כספיים",
+    "analyst": "👥 המלצת אנליסט",
+    "merger": "🤝 מיזוג/רכישה",
+    "geopolitical": "🌍 גיאופוליטי",
+    "fed": "🏛️ פד/ריבית",
+    "economic": "📈 נתון כלכלי",
+    "company_news": "🏢 חדשות חברה",
+    "macro": "💼 מאקרו",
 }
 
-IMPORTANCE_EMOJI = {
-    "high": "🚨 דחוף",
-    "medium": "⚠️ חשוב",
-    "low": "ℹ️ מידע",
+SENTIMENT_LABELS = {
+    "bullish": "חיובי לשוק 🟢",
+    "bearish": "שלילי לשוק 🔴",
+    "neutral": "ניטרלי 🟡",
 }
+
+MARKET_KEYWORDS = [
+    # Companies & stocks
+    "stock", "shares", "earnings", "revenue", "profit", "loss",
+    "guidance", "outlook", "dividend", "buyback", "ipo", "merger",
+    "acquisition", "deal", "partnership",
+    # Fed & macro
+    "fed", "federal reserve", "interest rate", "inflation", "cpi",
+    "gdp", "unemployment", "powell", "recession", "economy",
+    "treasury", "yield", "bond",
+    # Markets
+    "market", "nasdaq", "s&p", "dow jones", "wall street", "trading",
+    "rally", "crash", "bull", "bear", "volatility", "vix", "options",
+    "futures",
+    # Geopolitical that moves markets
+    "sanctions", "tariff", "trade war", "oil", "opec", "energy",
+    "supply chain",
+    # Analyst actions
+    "analyst", "upgrade", "downgrade", "price target", "rating",
+    "buy", "sell", "overweight", "underweight",
+    # Corporate actions
+    "ceo", "layoff", "bankruptcy", "lawsuit", "fda", "approval",
+    "regulation",
+]
+
+IRRELEVANT_KEYWORDS = [
+    "sports", "celebrity", "entertainment", "movie", "music",
+    "fashion", "food", "weather", "crime", "accident",
+]
+
+_MARKDOWN_HEADING_RE = re.compile(r"#+\s*")
 
 HIGH_KEYWORDS = [
     "fed", "interest rate", "recession", "war", "sanctions",
@@ -87,6 +121,60 @@ class SmartNewsMonitor:
         except TelegramServiceError as exc:
             logger.warning("Telegram disabled: %s", exc)
             self.telegram = None
+
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        self._anthropic: Optional[Anthropic] = Anthropic(api_key=api_key) if api_key else None
+        if self._anthropic is None:
+            logger.warning("Anthropic disabled (no ANTHROPIC_API_KEY) – translations skipped")
+
+    # ───────────────────────── translation + filtering ─────────────────────────
+
+    async def _translate_to_hebrew(self, text: str) -> str:
+        text = (text or "").strip()
+        if not text:
+            return ""
+        if self._anthropic is None:
+            return text
+        try:
+            response = await asyncio.to_thread(
+                self._anthropic.messages.create,
+                model="claude-haiku-4-5",
+                max_tokens=500,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            "תרגם את הטקסט הבא לעברית בצורה טבעית וברורה.\n"
+                            "אם זה כבר עברית – השאר כמו שזה.\n"
+                            "רק את התרגום, בלי הסברים:\n\n"
+                            f"{text}"
+                        ),
+                    }
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Translation failed: %s", exc)
+            return text
+
+        chunks: list[str] = []
+        for block in getattr(response, "content", []) or []:
+            if getattr(block, "type", None) == "text":
+                chunks.append(getattr(block, "text", ""))
+        translated = "".join(chunks).strip()
+        return translated or text
+
+    @staticmethod
+    def _clean_markdown(text: str) -> str:
+        if not text:
+            return ""
+        return _MARKDOWN_HEADING_RE.sub("", text).strip()
+
+    def _is_market_relevant(self, headline: str, summary: str) -> bool:
+        """Return True only if the news can move stocks, indices, or options."""
+        text = ((headline or "") + " " + (summary or "")).lower()
+        has_market_keyword = any(kw in text for kw in MARKET_KEYWORDS)
+        is_irrelevant = any(kw in text for kw in IRRELEVANT_KEYWORDS)
+        return has_market_keyword and not is_irrelevant
 
     # ───────────────────────── helpers ─────────────────────────
 
@@ -169,20 +257,44 @@ class SmartNewsMonitor:
 
     # ───────────────────────── save + telegram ─────────────────────────
 
-    def _format_for_telegram(self, news: dict) -> str:
-        emoji = CATEGORY_EMOJI.get(news.get("category", ""), "📰")
-        tickers_str = " ".join(f"${t}" for t in news.get("tickers", []) or [])
+    async def _format_for_telegram(self, news: dict) -> str:
+        headline_raw = self._clean_markdown(news.get("headline") or "")
+        summary_raw = self._clean_markdown((news.get("summary") or "")[:200])
+
+        headline_heb = await self._translate_to_hebrew(headline_raw)
+        summary_heb = await self._translate_to_hebrew(summary_raw) if summary_raw else ""
+
+        tickers_str = " ".join(f"${t}" for t in (news.get("tickers") or []))
+        importance = IMPORTANCE_LABELS.get(
+            news.get("importance", "low"), IMPORTANCE_LABELS["low"]
+        )
+        category = CATEGORY_LABELS.get(
+            news.get("category", "macro"), CATEGORY_LABELS["macro"]
+        )
+        sentiment = SENTIMENT_LABELS.get(
+            news.get("sentiment") or "neutral", SENTIMENT_LABELS["neutral"]
+        )
+
         return (
-            f"{IMPORTANCE_EMOJI.get(news['importance'], 'ℹ️')}\n\n"
-            f"{emoji} {news['headline']}\n\n"
-            f"{(news.get('summary') or '')[:300]}\n\n"
-            f"💹 מניות מושפעות: {tickers_str or '—'}\n"
-            f"📊 סנטימנט: {SENTIMENT_EMOJI.get(news.get('sentiment') or 'neutral', '🟡 ניטרלי')}\n"
-            f"🔗 מקור: {news.get('source', '—')}\n\n"
-            f"#{news.get('category', 'news')}"
+            f"{importance}\n"
+            f"{category}\n\n"
+            f"📰 {headline_heb}\n\n"
+            f"{summary_heb}\n\n"
+            "━━━━━━━━━━━━━━\n"
+            f"💹 מניות: {tickers_str or 'שוק כללי'}\n"
+            f"📊 השפעה: {sentiment}"
         )
 
     async def _save_and_send(self, news_data: dict) -> None:
+        if not self._is_market_relevant(
+            news_data.get("headline", ""), news_data.get("summary", "") or ""
+        ):
+            logger.info(
+                "Skipping non-market news: %s",
+                (news_data.get("headline") or "")[:50],
+            )
+            return
+
         news_data["expires_at"] = datetime.utcnow() + timedelta(days=7)
         news_data["sent_to_user_at"] = datetime.utcnow()
         news_data.setdefault("created_at", datetime.utcnow())
@@ -206,9 +318,12 @@ class SmartNewsMonitor:
         if self.telegram is None:
             return
         try:
+            body = await self._format_for_telegram(news_data)
+            title_raw = self._clean_markdown(news_data.get("headline") or "")[:80]
+            title_heb = await self._translate_to_hebrew(title_raw) if title_raw else "חדשות שוק"
             await self.telegram.send_alert(
-                title=news_data["headline"][:80],
-                body=self._format_for_telegram(news_data),
+                title=title_heb[:80],
+                body=body,
                 urgency=news_data.get("importance", "info"),
             )
         except Exception as exc:  # noqa: BLE001
