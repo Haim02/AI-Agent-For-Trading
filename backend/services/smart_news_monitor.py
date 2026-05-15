@@ -129,31 +129,35 @@ class SmartNewsMonitor:
 
     # ───────────────────────── translation + filtering ─────────────────────────
 
-    async def _translate_to_hebrew(self, text: str) -> str:
+    async def _translate(self, text: str) -> str:
         text = (text or "").strip()
-        if not text:
-            return ""
+        if not text or len(text) < 3:
+            return text
         if self._anthropic is None:
             return text
+
+        hebrew_chars = sum(1 for c in text if "א" <= c <= "ת")
+        if hebrew_chars > len(text) * 0.3:
+            return text
+
         try:
             response = await asyncio.to_thread(
                 self._anthropic.messages.create,
                 model="claude-haiku-4-5",
-                max_tokens=500,
+                max_tokens=400,
                 messages=[
                     {
                         "role": "user",
                         "content": (
-                            "תרגם את הטקסט הבא לעברית בצורה טבעית וברורה.\n"
-                            "אם זה כבר עברית – השאר כמו שזה.\n"
-                            "רק את התרגום, בלי הסברים:\n\n"
+                            "תרגם לעברית טבעית וברורה. "
+                            "רק את התרגום בלי הסברים נוספים:\n\n"
                             f"{text}"
                         ),
                     }
                 ],
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Translation failed: %s", exc)
+            logger.error("Translation error: %s", exc)
             return text
 
         chunks: list[str] = []
@@ -162,6 +166,10 @@ class SmartNewsMonitor:
                 chunks.append(getattr(block, "text", ""))
         translated = "".join(chunks).strip()
         return translated or text
+
+    # Backwards-compatible alias
+    async def _translate_to_hebrew(self, text: str) -> str:
+        return await self._translate(text)
 
     @staticmethod
     def _clean_markdown(text: str) -> str:
@@ -259,21 +267,42 @@ class SmartNewsMonitor:
 
     async def _format_for_telegram(self, news: dict) -> str:
         headline_raw = self._clean_markdown(news.get("headline") or "")
-        summary_raw = self._clean_markdown((news.get("summary") or "")[:200])
+        summary_raw = self._clean_markdown(news.get("summary") or "")
 
-        headline_heb = await self._translate_to_hebrew(headline_raw)
-        summary_heb = await self._translate_to_hebrew(summary_raw) if summary_raw else ""
+        headline_heb = await self._translate(headline_raw)
+        summary_heb = await self._translate(summary_raw) if summary_raw else ""
 
-        tickers_str = " ".join(f"${t}" for t in (news.get("tickers") or []))
+        # If summary duplicates headline (or is too short), ask Perplexity for context.
+        if (
+            summary_heb.strip() == headline_heb.strip()
+            or len(summary_raw) < 20
+        ) and self.perplexity is not None:
+            try:
+                result = await asyncio.to_thread(
+                    self.perplexity.search,
+                    f"Explain in 2 sentences why this matters for stock market: {headline_raw}",
+                )
+                extra = (result.get("answer") if isinstance(result, dict) else "") or ""
+                extra = extra[:300]
+                summary_heb = await self._translate(extra) if extra else "אין פרטים נוספים זמינים"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Perplexity context fetch failed: %s", exc)
+                summary_heb = "אין פרטים נוספים זמינים"
+
+        tickers = news.get("tickers") or []
+        tickers_str = " ".join(f"${t}" for t in tickers) if tickers else "שוק כללי"
         importance = IMPORTANCE_LABELS.get(
-            news.get("importance", "low"), IMPORTANCE_LABELS["low"]
+            news.get("importance", "medium"), IMPORTANCE_LABELS["medium"]
         )
         category = CATEGORY_LABELS.get(
-            news.get("category", "macro"), CATEGORY_LABELS["macro"]
+            news.get("category", "company_news"), CATEGORY_LABELS["company_news"]
         )
         sentiment = SENTIMENT_LABELS.get(
             news.get("sentiment") or "neutral", SENTIMENT_LABELS["neutral"]
         )
+
+        from utils.time_helper import format_israel_time
+        time_str = format_israel_time()
 
         return (
             f"{importance}\n"
@@ -281,8 +310,9 @@ class SmartNewsMonitor:
             f"📰 {headline_heb}\n\n"
             f"{summary_heb}\n\n"
             "━━━━━━━━━━━━━━\n"
-            f"💹 מניות: {tickers_str or 'שוק כללי'}\n"
-            f"📊 השפעה: {sentiment}"
+            f"💹 מניות: {tickers_str}\n"
+            f"📊 השפעה: {sentiment}\n"
+            f"🕐 {time_str} (ישראל)"
         )
 
     async def _save_and_send(self, news_data: dict) -> None:
