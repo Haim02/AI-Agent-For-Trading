@@ -17,7 +17,6 @@ from scrapers.menthorq_scraper import MenthorQScraper
 from services.telegram_service import TelegramService, TelegramServiceError
 from tools.fear_greed_tool import FearGreedTool
 from tools.macro_tool import MacroTool
-from tools.reddit_sentiment_tool import RedditSentimentTool
 
 logger = logging.getLogger(__name__)
 
@@ -54,55 +53,59 @@ class AutonomousAgent:
         return await self.run(task, session_id=session)
 
     async def morning_routine(self) -> str:
-        logger.info("🌅 מתחיל שגרת בוקר אוטונומית...")
+        from utils.time_helper import now_israel
 
-        fg_task = asyncio.to_thread(FearGreedTool().get_fear_greed_index)
+        now = now_israel()
+        logger.info("🌅 שגרת בוקר ישראל %s", now.strftime("%H:%M %d/%m/%Y"))
+
         macro_task = asyncio.to_thread(MacroTool().get_market_summary)
-        reddit_task = asyncio.to_thread(RedditSentimentTool().get_trending_tickers)
-        fg_data, macro_summary, trending = await asyncio.gather(
-            fg_task, macro_task, reddit_task, return_exceptions=True
+        fg_task = asyncio.to_thread(FearGreedTool().get_fear_greed_index)
+        cal_task = asyncio.to_thread(MacroTool().get_economic_calendar)
+        macro, fg, calendar = await asyncio.gather(
+            macro_task, fg_task, cal_task, return_exceptions=True
         )
 
-        scan_response = await self.run_autonomous_task(
-            "סרוק את השוק ומצא הזדמנויות מסחר להיום."
-        )
-        self.last_scan_at = datetime.utcnow()
+        macro_text = macro if isinstance(macro, str) else ""
+        fg_dict = fg if isinstance(fg, dict) else {}
+        cal_list = calendar if isinstance(calendar, list) else []
 
-        sections: list[str] = []
-        if isinstance(fg_data, dict) and fg_data:
-            sections.append(
-                "😱 Fear & Greed: "
-                f"{fg_data.get('score', '—')} – {fg_data.get('hebrew_rating', '—')}\n"
-                f"💡 {fg_data.get('strategy_implication', '')}"
+        today_str = now.strftime("%Y-%m-%d")
+        today_events = [e for e in cal_list if e.get("date") == today_str]
+
+        calendar_text = ""
+        if today_events:
+            events = "\n".join(
+                f"• {e.get('event', '')} - {e.get('time', '')}"
+                for e in today_events[:3]
             )
-        elif isinstance(fg_data, Exception):
-            logger.warning("Fear & Greed failed in morning routine: %s", fg_data)
+            calendar_text = f"\n📅 *אירועים היום:*\n{events}"
 
-        if isinstance(macro_summary, str) and macro_summary:
-            sections.append(macro_summary)
-        elif isinstance(macro_summary, Exception):
-            logger.warning("Macro overview failed in morning routine: %s", macro_summary)
+        message = (
+            "🌅 *בוקר טוב חיים!*\n"
+            f"{now.strftime('%A %d/%m/%Y')} | {now.strftime('%H:%M')} ישראל\n"
+            "\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "📊 *סקירת בוקר*\n"
+            "\n"
+            f"{macro_text}\n"
+            "\n"
+            f"😱 *Fear & Greed:* {fg_dict.get('score', '—')}/100\n"
+            f"{fg_dict.get('hebrew_rating', '—')}\n"
+            f"{calendar_text}\n"
+            "\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "⏰ *לוח זמנים היום (שעון ישראל):*\n"
+            "- 14:00 - פרה-מרקט\n"
+            "- 16:30 - פתיחת שוק 🔔\n"
+            "- 23:00 - סגירת שוק\n"
+            "- 23:30 - סיכום יום אוטומטי\n"
+            "\n"
+            "💡 שלח \"תמליץ על מניות להיום\" ב-14:00"
+        )
 
-        if isinstance(trending, list) and trending:
-            reddit_lines = ["💬 מניות טרנדיות ברדיט:"]
-            for item in trending[:5]:
-                emoji = (
-                    "🟢" if item.get("sentiment") == "bullish"
-                    else "🔴" if item.get("sentiment") == "bearish"
-                    else "🟡"
-                )
-                reddit_lines.append(
-                    f"• {item['ticker']} – {item['mentions']} אזכורים {emoji}"
-                )
-            sections.append("\n".join(reddit_lines))
-        elif isinstance(trending, Exception):
-            logger.warning("Reddit sentiment failed in morning routine: %s", trending)
-
-        sections.append("🔍 סריקת שוק:\n" + scan_response)
-
-        body = "\n\n".join(sections)
-        await self._notify_telegram("🌅 סריקת בוקר", body)
-        return body
+        self.last_scan_at = datetime.utcnow()
+        await self._notify_telegram("🌅 בוקר טוב חיים", message)
+        return message
 
     async def eod_routine(self) -> str:
         logger.info("🌆 מתחיל סיכום יום אוטונומי...")

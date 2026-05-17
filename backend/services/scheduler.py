@@ -22,6 +22,7 @@ from services.telegram_service import TelegramService, TelegramServiceError
 logger = logging.getLogger(__name__)
 
 EST = ZoneInfo("America/New_York")
+UTC = ZoneInfo("UTC")
 
 _scheduler: Optional[AsyncIOScheduler] = None
 _telegram: Optional[TelegramService] = None
@@ -175,6 +176,33 @@ async def job_run_morning_scan() -> None:
         await get_autonomous_agent().morning_routine()
     except Exception:  # noqa: BLE001
         logger.exception("job_run_morning_scan failed")
+
+
+async def send_market_open_alert() -> None:
+    """16:30 Israel time – ping Haim that the US market just opened."""
+    try:
+        from tools.macro_tool import MacroTool
+        from utils.time_helper import now_israel
+
+        macro = await asyncio.to_thread(MacroTool().get_market_summary)
+        now = now_israel()
+
+        tg = _telegram_service()
+        if tg is None:
+            return
+        body = (
+            f"🔔 *השוק נפתח - {now.strftime('%H:%M')} (ישראל)*\n\n"
+            f"{macro}\n\n"
+            "📊 מוכן לסריקה? שלח:\n"
+            "\"תמליץ על מניות להיום\""
+        )
+        await tg.send_alert(
+            title="🔔 השוק האמריקאי נפתח!",
+            body=body,
+            urgency="medium",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("send_market_open_alert failed")
 
 
 async def job_run_eod_routine() -> None:
@@ -411,17 +439,27 @@ def start_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
     )
+    # 08:00 Israel (sun-thu = Israel work week)
     _scheduler.add_job(
         job_run_morning_scan,
-        CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=EST),
-        id="morning_scan",
+        CronTrigger(day_of_week="sun-thu", hour=5, minute=0, timezone=UTC),
+        id="morning_briefing_israel",
         replace_existing=True,
         max_instances=1,
     )
+    # 23:30 Israel
     _scheduler.add_job(
         job_run_eod_routine,
-        CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=EST),
-        id="eod_routine",
+        CronTrigger(day_of_week="mon-fri", hour=20, minute=30, timezone=UTC),
+        id="eod_summary",
+        replace_existing=True,
+        max_instances=1,
+    )
+    # 16:30 Israel – market open alert
+    _scheduler.add_job(
+        send_market_open_alert,
+        CronTrigger(day_of_week="mon-fri", hour=13, minute=30, timezone=UTC),
+        id="market_open_alert",
         replace_existing=True,
         max_instances=1,
     )
@@ -447,18 +485,20 @@ def start_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
 
-    # ───────── Smart news monitor ─────────
+    # ───────── Smart news monitor (Israel hours) ─────────
+    # News during US market hours: 16:30–23:00 Israel = 13:30–20:00 UTC
     _scheduler.add_job(
         job_smart_news_company,
-        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="0,30", timezone=EST),
+        CronTrigger(day_of_week="mon-fri", hour="13-20", minute="0,30", timezone=UTC),
         id="news_company",
         replace_existing=True,
         max_instances=1,
     )
+    # Macro check 3×/day Israel time: 08:00, 13:00, 20:00 IL = 05:00, 10:00, 17:00 UTC
     _scheduler.add_job(
         job_smart_news_macro,
-        CronTrigger(hour="6-20", minute=15, timezone=EST),
-        id="news_macro",
+        CronTrigger(day_of_week="sun-fri", hour="5,10,17", minute=0, timezone=UTC),
+        id="macro_news",
         replace_existing=True,
         max_instances=1,
     )
@@ -492,10 +532,11 @@ def start_scheduler() -> AsyncIOScheduler:
     )
 
     # ───────── Daily stock scanner ─────────
+    # Pre-market scan 14:00 Israel = 11:00 UTC (30 min before US pre-market)
     _scheduler.add_job(
         job_daily_stock_scan,
-        CronTrigger(day_of_week="mon-fri", hour=9, minute=30, timezone=EST),
-        id="daily_stock_scan",
+        CronTrigger(day_of_week="mon-fri", hour=11, minute=0, timezone=UTC),
+        id="pre_market_scan",
         replace_existing=True,
         max_instances=1,
     )
@@ -530,9 +571,10 @@ def start_scheduler() -> AsyncIOScheduler:
 
     _scheduler.start()
     logger.info(
-        "Scheduler started (EST). Jobs: market_news, ticker_news, daily_summary, "
-        "reflect_on_day, cleanup_short_term, purge_raw_data, morning_scan, "
-        "eod_routine, risk_check, gex_snapshot, iv_spikes"
+        "Scheduler started. Israel-time jobs: morning_briefing_israel (08:00), "
+        "pre_market_scan (14:00), market_open_alert (16:30), news_company (16:30–23:00), "
+        "eod_summary (23:30), macro_news (08:00/13:00/20:00). "
+        "EST jobs retained: market_news, ticker_news, risk_check, gex_snapshot, iv_spikes."
     )
     return _scheduler
 

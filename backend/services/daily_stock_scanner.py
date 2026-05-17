@@ -51,15 +51,20 @@ class DailyStockScanner:
     # ───────────────────────── public workflow ─────────────────────────
 
     async def run_daily_scan(self) -> list[dict[str, Any]]:
-        logger.info("🚀 מתחיל סריקה יומית של מניות")
+        logger.info("🔍 מתחיל סריקת מניות יומית...")
 
+        tickers: list[TickerSummary] = []
         try:
             tickers = await asyncio.to_thread(self._scrape_screener)
-        except Exception:  # noqa: BLE001
-            logger.exception("FinViz screener scrape failed")
-            return []
+            logger.info("✅ FinViz: %d מניות", len(tickers))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("FinViz error: %s", exc)
+            tickers = self._get_fallback_tickers()
+            logger.info("📋 Fallback: %d מניות", len(tickers))
 
-        logger.info("📊 נמצאו %d מניות לניתוח", len(tickers))
+        if not tickers:
+            await self._send_scan_error()
+            return []
 
         analyses: list[dict[str, Any]] = []
         for idx, summary in enumerate(tickers, start=1):
@@ -85,8 +90,36 @@ class DailyStockScanner:
         return analyses
 
     def _scrape_screener(self) -> list[TickerSummary]:
-        with FinVizScraper(headless=True) as scraper:
-            return scraper._scrape_screener_url(self.SCREENER_URL, max_pages=10)
+        with FinVizScraper(headless=True, slow_mode=True) as scraper:
+            return scraper._scrape_screener_url(self.SCREENER_URL, max_pages=5)
+
+    def _get_fallback_tickers(self) -> list[TickerSummary]:
+        """Liquid optionable names used when the FinViz screener is unavailable."""
+        symbols = [
+            "NVDA", "AAPL", "MSFT", "META", "GOOGL",
+            "AMZN", "TSLA", "AMD", "NFLX", "CRM",
+            "NOW", "PANW", "SNOW", "PLTR", "COIN",
+        ]
+        return [TickerSummary(ticker=s) for s in symbols]
+
+    async def _send_scan_error(self) -> None:
+        if self.telegram is None:
+            return
+        body = (
+            "⚠️ הסריקה האוטומטית נכשלה.\n\n"
+            "FinViz לא היה זמין.\n\n"
+            "💡 תוכל לבקש המלצות ידנית:\n"
+            "\"המלץ לי על מניות\"\n\n"
+            "הסוכן ישתמש במקורות חלופיים."
+        )
+        try:
+            await self.telegram.send_alert(
+                title="⚠️ שגיאה בסריקה",
+                body=body,
+                urgency="medium",
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("_send_scan_error: Telegram failed")
 
     # ───────────────────────── per-stock analysis ─────────────────────────
 
