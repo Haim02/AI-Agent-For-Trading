@@ -41,10 +41,17 @@ class AutonomousAgent:
             self._ensure_graph()
         logger.info("🤖 סוכן אוטונומי מוכן לפעולה")
 
-    async def run(self, user_message: str, session_id: Optional[str] = None) -> str:
+    async def run(
+        self,
+        user_message: str,
+        session_id: Optional[str] = None,
+        conversation_history: Optional[list[dict[str, Any]]] = None,
+    ) -> str:
         session = session_id or f"session:{uuid.uuid4().hex[:12]}"
         graph = self._ensure_graph()
         state = initial_state(user_message, session_id=session)
+        if conversation_history:
+            state["messages"] = list(conversation_history)
         final = await graph.ainvoke(state)
         return final.get("response") or "(לא התקבלה תשובה)"
 
