@@ -3,8 +3,9 @@ import os
 from typing import Any, Optional
 
 from telegram import Bot
-from telegram.constants import ParseMode
 from telegram.error import TelegramError
+
+from utils.text_clean import clean_response
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,7 @@ class TelegramService:
         try:
             await self._bot.send_message(
                 chat_id=self.chat_id,
-                text=text,
-                parse_mode=ParseMode.MARKDOWN,
+                text=clean_response(text),
                 disable_web_page_preview=True,
             )
             return True
@@ -57,7 +57,8 @@ class TelegramService:
 
     async def send_alert(self, title: str, body: str, urgency: str = "info") -> bool:
         emoji = URGENCY_EMOJI.get(urgency.lower(), URGENCY_EMOJI["info"])
-        text = f"{emoji} *{_escape_md(title)}*\n\n{body}"
+        body = clean_response(body)
+        text = f"{emoji} {title}\n\n{body}"
         return await self.send_message(text)
 
     async def send_market_summary(self, summary: dict[str, Any]) -> bool:
@@ -70,19 +71,14 @@ class TelegramService:
 
         pnl_emoji = "🟢" if daily_pnl >= 0 else "🔴"
         lines = [
-            f"📊 *סיכום יומי — {date}*",
+            f"📊 סיכום יומי — {date}",
             "",
-            f"{pnl_emoji} P&L יומי: `${daily_pnl:,.2f}`",
-            f"💼 פוזיציות פתוחות: `{open_positions}`",
-            f"✅ פוזיציות סגורות: `{closed_positions}`",
-            f"💰 רווח מימוש מצטבר: `${total_realized:,.2f}`",
+            f"{pnl_emoji} P&L יומי: ${daily_pnl:,.2f}",
+            f"💼 פוזיציות פתוחות: {open_positions}",
+            f"✅ פוזיציות סגורות: {closed_positions}",
+            f"💰 רווח מימוש מצטבר: ${total_realized:,.2f}",
         ]
         if notes:
             lines.extend(["", "📝 הערות:", notes])
 
         return await self.send_message("\n".join(lines))
-
-
-def _escape_md(text: str) -> str:
-    # Minimal escaping for legacy Markdown parse mode.
-    return text.replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")

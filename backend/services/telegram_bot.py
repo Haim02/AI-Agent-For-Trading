@@ -1,14 +1,12 @@
 import asyncio
 import logging
 import os
-import re
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Optional
 
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -23,6 +21,7 @@ from analytics.gex_calculator import GEXCalculator
 from db.connection import get_db
 from memory.long_term import LongTermMemory
 from scrapers.menthorq_scraper import MenthorQScraper
+from utils.text_clean import clean_response
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -75,44 +74,10 @@ def _agent() -> AutonomousAgent:
     return get_autonomous_agent()
 
 
-def clean_response(text: str) -> str:
-    """Normalize agent output into Telegram-safe text.
-
-    Telegram doesn't render ``##`` headings or stray ``**`` from generic Markdown,
-    and we never want raw tool-call JSON or fenced code blocks bleeding through.
-    """
-    if not text:
-        return "מצטער, אירעה שגיאה. נסה שוב."
-
-    # Strip tool-envelope JSON and fenced code blocks the agent occasionally leaks.
-    text = re.sub(r"```json.*?```", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-    text = re.sub(r'\{[^{}]*"tool"[^{}]*\}', "", text)
-    text = re.sub(r'\{[^{}]*"action"[^{}]*\}', "", text)
-    text = re.sub(r'\{[^{}]*"tool_input"[^{}]*\}', "", text)
-
-    # ## Heading  →  *Heading*  (Telegram-Markdown bold)
-    text = re.sub(r"#{1,6}\s*(.+)", r"*\1*", text)
-
-    # Drop unmatched ** so Telegram doesn't choke on odd parser state.
-    if text.count("**") % 2 != 0:
-        text = text.replace("**", "")
-
-    # Horizontal rules and stray ``` openers.
-    text = re.sub(r"\n-{3,}\n", "\n\n", text)
-    text = re.sub(r"```\w*\n?", "", text)
-
-    # Collapse 3+ blank lines and trim trailing dash/whitespace runs.
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = text.strip("- \n")
-
-    return text.strip() or "מצטער, אירעה שגיאה. נסה שוב."
-
-
-async def _send(update: Update, text: str, parse: bool = True) -> None:
+async def _send(update: Update, text: str, parse: bool = False) -> None:
+    """Send a plain-text Telegram reply. ``parse`` kept for call-site compat."""
     await update.effective_message.reply_text(
-        text,
-        parse_mode=ParseMode.MARKDOWN if parse else None,
+        clean_response(text),
         disable_web_page_preview=True,
     )
 
@@ -249,6 +214,18 @@ async def cmd_learn(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _send(update, f"✅ נשמר ({doc_id})", parse=False)
 
 
+async def _fallback_claude_chat(history: list[dict], user_text: str) -> str:
+    """Direct ChatAgent call when the LangGraph agent fails. Preserves history."""
+    from agent.chat_agent import ChatAgent  # local import keeps cold-start light
+    agent = ChatAgent()
+    result = await agent.chat(
+        user_text,
+        conversation_history=history[:-1],  # exclude the just-added current turn
+        session_id="fallback",
+    )
+    return result.get("response", "")
+
+
 async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     text = (message.text or "").strip()
@@ -277,27 +254,28 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     add_to_history(chat_id, "user", text)
     history = get_history(chat_id)
 
+    response: str = ""
     try:
         logger.info("Sending to agent (session=%s, history=%d)...", session_id, len(history))
         response = await _agent().run(
             text, session_id=session_id, conversation_history=history
         )
         logger.info("Agent response: %s", response)
-
-        clean_text = clean_response(response or "")
-        add_to_history(chat_id, "assistant", clean_text)
-
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("on_message: agent failed for chat %s – using ChatAgent fallback", chat_id)
         try:
-            await message.reply_text(clean_text)
+            response = await _fallback_claude_chat(history, text)
         except Exception:  # noqa: BLE001
-            logger.exception("reply_text failed, retrying without formatting")
-            await message.reply_text(clean_text[:4000])
+            logger.exception("on_message: ChatAgent fallback also failed")
+            response = "מצטער חיים, הייתה שגיאה. נסה שוב."
+
+    clean_text = clean_response(response or "")
+    add_to_history(chat_id, "assistant", clean_text)
+
+    try:
+        await message.reply_text(clean_text[:4000])
     except Exception:  # noqa: BLE001
-        logger.exception("on_message: agent failed for chat %s", chat_id)
-        try:
-            await message.reply_text("מצטער חיים, הייתה שגיאה. נסה שוב.")
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to send fallback error reply")
+        logger.exception("reply_text failed for chat %s", chat_id)
 
 
 # ───────────────────────── lifecycle ─────────────────────────

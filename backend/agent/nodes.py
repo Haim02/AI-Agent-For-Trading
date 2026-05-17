@@ -147,23 +147,43 @@ async def think_node(state: AgentState) -> AgentState:
         state["response"] = "⚠️ לא הוגדר ANTHROPIC_API_KEY – לא ניתן להפעיל את הסוכן."
         return state
 
-    history_lines: list[str] = []
-    for msg in state.get("messages", []):
-        role = msg.get("role", "assistant")
-        content = msg.get("content", "")
-        history_lines.append(f"[{role}] {content}")
+    # Build a real multi-turn messages array. The Anthropic API requires strict
+    # user/assistant alternation, so we collapse consecutive same-role turns.
+    history_msgs: list[dict[str, str]] = []
+    for msg in (state.get("messages") or [])[-20:]:
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        if history_msgs and history_msgs[-1]["role"] == role:
+            history_msgs[-1]["content"] += "\n\n" + content
+        else:
+            history_msgs.append({"role": role, "content": content})
+
+    # If history ends on assistant, that's fine — we'll append the new user turn.
+    # If it ends on user (no assistant reply yet), drop that trailing entry to
+    # avoid two consecutive user messages once we append the current turn.
+    if history_msgs and history_msgs[-1]["role"] == "user":
+        history_msgs.pop()
 
     context_text = json.dumps(state.get("market_context", {}), ensure_ascii=False, default=str)
     last_tool = state.get("last_tool_result") or "(טרם הופעל כלי)"
+    analysis = state.get("analysis_results") or {}
+    analysis_text = (
+        json.dumps(_jsonable(analysis), ensure_ascii=False, default=str)
+        if analysis else "(טרם נאסף מידע)"
+    )
 
-    user_prompt = (
+    current_turn = (
         f"הודעת חיים: {state.get('user_message', '')}\n\n"
-        f"היסטוריית שיחה:\n{chr(10).join(history_lines) or '(ריק)'}\n\n"
         f"הקשר שוק:\n{context_text}\n\n"
+        f"מידע שנאסף בסבבים קודמים:\n{analysis_text}\n\n"
         f"תוצאת הכלי האחרון:\n{last_tool}\n\n"
         f"כלים זמינים:\n{list_tool_descriptions()}\n\n"
         f"{THINK_INSTRUCTIONS}"
     )
+
+    messages_for_claude = history_msgs + [{"role": "user", "content": current_turn}]
 
     try:
         client = Anthropic(api_key=api_key)
@@ -172,7 +192,7 @@ async def think_node(state: AgentState) -> AgentState:
             model=CLAUDE_MODEL,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=messages_for_claude,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("think_node: Claude call failed")
