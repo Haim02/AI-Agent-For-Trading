@@ -598,6 +598,26 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
         if gamma_flip is None:
             gamma_flip = round(spot * 0.998, 0)
 
+        # Clamp extreme levels: anything more than 15% from spot is almost
+        # certainly a data artifact (wrong contract, very thin OI strike, etc.).
+        # Snap it back to a sensible ±2-3% estimate so the chart stays readable.
+        MAX_LEVEL_DIST = 0.15
+
+        def _clamp_level(level: Optional[float], direction: str) -> Optional[float]:
+            if level is None or spot <= 0:
+                return level
+            if abs(level - spot) / spot <= MAX_LEVEL_DIST:
+                return level
+            if direction == "call":
+                return round(spot * 1.025, 0)
+            if direction == "put":
+                return round(spot * 0.975, 0)
+            return round(spot * 0.998, 0)  # flip
+
+        call_wall = _clamp_level(call_wall, "call")
+        put_wall = _clamp_level(put_wall, "put")
+        gamma_flip = _clamp_level(gamma_flip, "flip")
+
         levels: list[dict[str, Any]] = [
             {
                 "id": "call_wall",
@@ -636,6 +656,9 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
         for s in top_strikes[:6]:
             strike = s.get("strike") or 0
             if not strike:
+                continue
+            # Skip strikes more than ±8% from spot – they'd compress the chart.
+            if spot > 0 and abs(strike - spot) / spot > 0.08:
                 continue
             if strike > spot and ut_count <= 3:
                 levels.append(

@@ -124,23 +124,39 @@ function CandleChart({
 
   const HEIGHT = 480;
   const PAD_LEFT = 8;
-  const PAD_RIGHT = 108;
+  const PAD_RIGHT = 110;
   const PAD_TOP = 20;
   const PAD_BOT = 36;
+  const MAX_DIST = 0.08; // ±8% of spot — anything farther is clipped from chart
 
-  // Shared bounds so the hover overlay and the draw routine agree on price↔pixel mapping.
+  // Filter levels/arrows that are within MAX_DIST of spot. Both the bounds
+  // calculation and the rendering loops must use the same filtered sets so the
+  // hover tooltip's price-mapping stays in sync with what's actually drawn.
+  const visibleLevels =
+    spot > 0
+      ? levels.filter((l) => Math.abs(l.price - spot) / spot <= MAX_DIST)
+      : levels;
+  const visibleArrows =
+    spot > 0
+      ? arrows.filter((a) => Math.abs(a.price - spot) / spot <= MAX_DIST)
+      : arrows;
+
   const computeBounds = useCallback(() => {
     if (!candles.length) return { pMin: 0, pMax: 1 };
-    const allPx = [
-      ...candles.flatMap((c) => [c.high, c.low]),
-      ...levels.map((l) => l.price),
-      ...arrows.map((a) => a.price),
+    const candlePrices = candles.flatMap((c) => [c.high, c.low]);
+    const allVisiblePx = [
+      ...candlePrices,
+      ...visibleLevels.map((l) => l.price),
+      ...visibleArrows.map((a) => a.price),
     ];
-    const rawMin = Math.min(...allPx);
-    const rawMax = Math.max(...allPx);
-    const pad = (rawMax - rawMin) * 0.1;
+    const rawMin = Math.min(...allVisiblePx);
+    const rawMax = Math.max(...allVisiblePx);
+    // Floor the visible range at 1% of spot so a quiet session doesn't flatten the chart.
+    const minRange = spot * 0.01;
+    const finalRange = Math.max(rawMax - rawMin, minRange);
+    const pad = finalRange * 0.15;
     return { pMin: rawMin - pad, pMax: rawMax + pad };
-  }, [candles, levels, arrows]);
+  }, [candles, visibleLevels, visibleArrows, spot]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -206,8 +222,8 @@ function CandleChart({
     }
     ctx.setLineDash([]);
 
-    // GEX level lines + right-side pills
-    levels.forEach((lv) => {
+    // GEX level lines + right-side pills (only the ones within ±8% of spot)
+    visibleLevels.forEach((lv) => {
       const y = toY(lv.price);
       if (y < PAD_TOP - 2 || y > H - PAD_BOT + 2) return;
 
@@ -225,8 +241,8 @@ function CandleChart({
       ctx.restore();
 
       ctx.save();
-      const lblW = 104;
-      const lblH = 17;
+      const lblW = 110;
+      const lblH = 20;
       const lx = W - PAD_RIGHT + 2;
       const ly = y - lblH / 2;
       ctx.fillStyle = lv.color + "20";
@@ -239,14 +255,14 @@ function CandleChart({
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = lv.color;
-      ctx.font = 'bold 9.5px "SF Mono", monospace';
+      ctx.font = 'bold 10px -apple-system, monospace';
       ctx.textAlign = "left";
-      ctx.fillText(lv.label, lx + 5, ly + 12);
+      ctx.fillText(lv.label, lx + 5, ly + 13);
       ctx.restore();
     });
 
     // Entry arrows
-    arrows.forEach((ar) => {
+    visibleArrows.forEach((ar) => {
       const y = toY(ar.price);
       if (y < PAD_TOP || y > H - PAD_BOT) return;
 
@@ -313,9 +329,30 @@ function CandleChart({
     ctx.fillText(spot.toLocaleString(), W - PAD_RIGHT + 6, sy + 4);
     ctx.restore();
 
+    // Area fill under close line (subtle TradingView-style gradient)
+    const isUpDay = candles[candles.length - 1].close >= candles[0].open;
+    const areaGrad = ctx.createLinearGradient(0, PAD_TOP, 0, H - PAD_BOT);
+    if (isUpDay) {
+      areaGrad.addColorStop(0, "#26a69a18");
+      areaGrad.addColorStop(1, "#26a69a00");
+    } else {
+      areaGrad.addColorStop(0, "#ef535018");
+      areaGrad.addColorStop(1, "#ef535000");
+    }
+    ctx.save();
+    ctx.fillStyle = areaGrad;
+    ctx.beginPath();
+    ctx.moveTo(toX(0), toY(candles[0].close));
+    candles.forEach((c, i) => ctx.lineTo(toX(i), toY(c.close)));
+    ctx.lineTo(toX(candles.length - 1), H - PAD_BOT);
+    ctx.lineTo(toX(0), H - PAD_BOT);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
     // Candles
     const slotW = chartW / candles.length;
-    const candleW = Math.max(1.5, Math.min(9, slotW * 0.7));
+    const candleW = Math.max(3, Math.min(12, slotW * 0.75));
     candles.forEach((c, i) => {
       const x = toX(i);
       const oY = toY(c.open);
@@ -356,7 +393,17 @@ function CandleChart({
       const label = candles[i].time_il || "";
       ctx.fillText(label, x, H - PAD_BOT + 18);
     }
-  }, [candles, levels, arrows, spot, computeBounds]);
+
+    // Top-left meta info
+    ctx.fillStyle = "#4b5563";
+    ctx.font = "10px monospace";
+    ctx.textAlign = "left";
+    ctx.fillText(
+      `${candles.length} נרות · 5m · שעון ישראל`,
+      PAD_LEFT + 4,
+      PAD_TOP - 6,
+    );
+  }, [candles, visibleLevels, visibleArrows, spot, computeBounds]);
 
   useEffect(() => {
     draw();
@@ -382,7 +429,7 @@ function CandleChart({
     const { pMin, pMax } = computeBounds();
     const pRange = pMax - pMin || 1;
     const hoverPrice = pMax - ((my - PAD_TOP) / chartH) * pRange;
-    const nearby = levels.find(
+    const nearby = visibleLevels.find(
       (l) => Math.abs(l.price - hoverPrice) < pRange * 0.007,
     );
 
@@ -504,6 +551,7 @@ function LevelList({ levels, spot }: { levels: Level[]; spot: number }) {
       {sorted.map((l) => {
         const dist = ((l.price - spot) / spot) * 100;
         const isAbove = l.price > spot;
+        const isOffChart = spot > 0 && Math.abs(l.price - spot) / spot > 0.08;
         return (
           <div
             key={l.id}
@@ -515,11 +563,18 @@ function LevelList({ levels, spot }: { levels: Level[]; spot: number }) {
                 style={{ backgroundColor: l.color }}
               />
               <div>
-                <div
-                  className="font-mono text-sm font-bold"
-                  style={{ color: l.color }}
-                >
-                  {l.label}
+                <div className="flex items-center gap-2">
+                  <span
+                    className="font-mono text-sm font-bold"
+                    style={{ color: l.color }}
+                  >
+                    {l.label}
+                  </span>
+                  {isOffChart && (
+                    <span className="rounded-full bg-gray-700 px-2 py-0.5 text-xs text-gray-400">
+                      מחוץ לטווח
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs text-gray-500">{l.description}</div>
               </div>
