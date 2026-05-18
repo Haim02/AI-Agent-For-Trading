@@ -157,6 +157,29 @@ async def delete_position(position_id: str) -> dict[str, Any]:
     return {"deleted": result.deleted_count}
 
 
+class ClosePositionRequest(BaseModel):
+    pnl: float
+    notes: Optional[str] = None
+
+
+@router.put("/positions/{position_id}/close")
+async def close_position(position_id: str, payload: ClosePositionRequest) -> dict[str, Any]:
+    db = get_db()
+    now = datetime.utcnow()
+    update = {
+        "status": "closed",
+        "realized_pnl": payload.pnl,
+        "close_date": now,
+        "updated_at": now,
+    }
+    if payload.notes:
+        update["close_notes"] = payload.notes
+    result = await db.positions.update_one({"_id": _oid(position_id)}, {"$set": update})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Position not found")
+    return {"closed": True, "realized_pnl": payload.pnl}
+
+
 # ───────────────────────── journal ─────────────────────────
 
 @router.get("/journal")

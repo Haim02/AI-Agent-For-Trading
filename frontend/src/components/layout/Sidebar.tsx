@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   BarChart2,
   Calendar,
+  CheckSquare,
   LayoutDashboard,
   LineChart,
   MessageCircle,
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
   { to: "/journal", label: "יומן", icon: Calendar },
   { to: "/scanner", label: "סורק", icon: Search },
   { to: "/chart", label: "GEX Chart", icon: LineChart },
+  { to: "/checklist", label: "צ'קליסט", icon: CheckSquare },
   { to: "/chat", label: "צ'אט", icon: MessageCircle },
   { to: "/analytics", label: "דשבורד אנליטיקס", icon: BarChart2 },
 ];

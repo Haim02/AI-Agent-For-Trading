@@ -1,19 +1,17 @@
 import { NavLink } from "react-router-dom";
 import {
-  Calendar,
+  CheckSquare,
   LayoutDashboard,
   LineChart,
   MessageCircle,
-  Search,
   TrendingUp,
 } from "lucide-react";
 
 const ITEMS = [
   { to: "/", label: "דשבורד", icon: LayoutDashboard },
-  { to: "/positions", label: "פוזיציות", icon: TrendingUp },
-  { to: "/journal", label: "יומן", icon: Calendar },
-  { to: "/scanner", label: "סורק", icon: Search },
   { to: "/chart", label: "צ'ארט", icon: LineChart },
+  { to: "/checklist", label: "צ'קליסט", icon: CheckSquare },
+  { to: "/positions", label: "פוזיציות", icon: TrendingUp },
   { to: "/chat", label: "צ'אט", icon: MessageCircle },
 ];
 

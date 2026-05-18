@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.autonomous_agent import get_autonomous_agent
+from api.checklist_routes import router as checklist_router
 from api.routes import router as api_router
 from db.connection import close as close_db, ping
 from services.massive_realtime import MassiveRealtimeMonitor
@@ -110,6 +111,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+app.include_router(checklist_router, prefix="/api")
 
 
 @app.get("/")

@@ -1,9 +1,12 @@
+import { useEffect } from "react";
 import { Route, Routes } from "react-router-dom";
 import BottomNav from "./components/layout/BottomNav";
 import Header from "./components/layout/Header";
 import Sidebar from "./components/layout/Sidebar";
+import { usePushNotifications } from "./hooks/usePushNotifications";
 import Analytics from "./pages/Analytics";
 import Chat from "./pages/Chat";
+import Checklist from "./pages/Checklist";
 import Dashboard from "./pages/Dashboard";
 import GEXChart from "./pages/GEXChart";
 import Journal from "./pages/Journal";
@@ -11,6 +14,17 @@ import Positions from "./pages/Positions";
 import Scanner from "./pages/Scanner";
 
 export default function App() {
+  const { supported, permission, requestPermission } = usePushNotifications();
+
+  useEffect(() => {
+    if (supported && permission === "default") {
+      const t = setTimeout(() => {
+        void requestPermission();
+      }, 3000);
+      return () => clearTimeout(t);
+    }
+  }, [supported, permission, requestPermission]);
+
   return (
     <div dir="rtl" className="flex h-screen bg-slate-900 text-white">
       {/* Sidebar – desktop only */}
@@ -28,6 +42,7 @@ export default function App() {
             <Route path="/journal" element={<Journal />} />
             <Route path="/scanner" element={<Scanner />} />
             <Route path="/chart" element={<GEXChart />} />
+            <Route path="/checklist" element={<Checklist />} />
             <Route path="/chat" element={<Chat />} />
             <Route path="/analytics" element={<Analytics />} />
           </Routes>

@@ -33,6 +33,7 @@ _market_analyzer = None
 _flow_engine = None
 _wall_detector = None
 _morning_briefing = None
+_weekly_report = None
 
 
 def get_smart_news_monitor() -> SmartNewsMonitor:
@@ -79,6 +80,14 @@ def _get_morning_briefing():
         from services.morning_briefing import MorningBriefing
         _morning_briefing = MorningBriefing()
     return _morning_briefing
+
+
+def _get_weekly_report():
+    global _weekly_report
+    if _weekly_report is None:
+        from services.weekly_report import WeeklyReportService
+        _weekly_report = WeeklyReportService()
+    return _weekly_report
 
 
 # ───────────────────────── helpers ─────────────────────────
@@ -397,6 +406,14 @@ async def job_morning_briefing() -> None:
         logger.exception("morning_briefing failed")
 
 
+async def job_weekly_report() -> None:
+    """Sunday 08:00 Israel – ship weekly P&L digest to Telegram."""
+    try:
+        await _get_weekly_report().generate_weekly_report()
+    except Exception:  # noqa: BLE001
+        logger.exception("weekly_report failed")
+
+
 async def job_daily_gex_report() -> None:
     """14:00 Israel – send GEX+Flow report for SPY/QQQ/SPX."""
     analyzer = _get_market_analyzer()
@@ -682,6 +699,15 @@ def start_scheduler() -> AsyncIOScheduler:
         job_unusual_flow_check,
         CronTrigger(day_of_week="mon-fri", hour="13-20", minute="*/15", timezone=UTC),
         id="unusual_flow",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Weekly P&L digest – Sunday 08:00 Israel = 05:00 UTC.
+    _scheduler.add_job(
+        job_weekly_report,
+        CronTrigger(day_of_week="sun", hour=5, minute=0, timezone=UTC),
+        id="weekly_report",
         replace_existing=True,
         max_instances=1,
     )

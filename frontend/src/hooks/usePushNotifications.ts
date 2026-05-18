@@ -10,9 +10,14 @@ function initialPermission(): PermissionState {
 export function usePushNotifications() {
   const [permission, setPermission] = useState<PermissionState>(initialPermission());
   const [subscription, setSubscription] = useState<PushSubscription | null>(null);
+  const supported =
+    typeof window !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window;
 
   useEffect(() => {
-    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    if (!supported) return;
     navigator.serviceWorker
       .register("/sw.js")
       .then((reg) => {
@@ -23,7 +28,7 @@ export function usePushNotifications() {
         if (sub) setSubscription(sub);
       })
       .catch((err) => console.warn("SW registration failed", err));
-  }, []);
+  }, [supported]);
 
   const requestPermission = async (): Promise<PermissionState> => {
     if (typeof Notification === "undefined") return "unsupported";
@@ -51,5 +56,5 @@ export function usePushNotifications() {
     });
   };
 
-  return { permission, requestPermission, sendLocalNotification, subscription };
+  return { permission, supported, requestPermission, sendLocalNotification, subscription };
 }
