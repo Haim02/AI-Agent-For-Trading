@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   Calendar,
   LayoutDashboard,
+  LineChart,
   MessageCircle,
   Search,
   TrendingUp,
@@ -12,6 +13,7 @@ const ITEMS = [
   { to: "/positions", label: "פוזיציות", icon: TrendingUp },
   { to: "/journal", label: "יומן", icon: Calendar },
   { to: "/scanner", label: "סורק", icon: Search },
+  { to: "/chart", label: "צ'ארט", icon: LineChart },
   { to: "/chat", label: "צ'אט", icon: MessageCircle },
 ];
 

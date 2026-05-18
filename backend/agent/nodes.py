@@ -174,14 +174,41 @@ async def think_node(state: AgentState) -> AgentState:
         if analysis else "(טרם נאסף מידע)"
     )
 
-    current_turn = (
-        f"הודעת חיים: {state.get('user_message', '')}\n\n"
-        f"הקשר שוק:\n{context_text}\n\n"
-        f"מידע שנאסף בסבבים קודמים:\n{analysis_text}\n\n"
-        f"תוצאת הכלי האחרון:\n{last_tool}\n\n"
-        f"כלים זמינים:\n{list_tool_descriptions()}\n\n"
-        f"{THINK_INSTRUCTIONS}"
+    # RAG: pull GEX/Flow knowledge that matches the user's message. Cache on state
+    # so subsequent think iterations don't re-query ChromaDB.
+    knowledge_context = state.get("gex_knowledge_context")
+    if knowledge_context is None:
+        knowledge_context = ""
+        try:
+            from memory.gex_knowledge_loader import GEXKnowledgeLoader
+            loader = GEXKnowledgeLoader()
+            relevant = await asyncio.to_thread(
+                loader.query_gex_knowledge, state.get("user_message", ""), 2
+            )
+            if relevant:
+                blocks = [
+                    f"\n{item.get('topic') or '—'}:\n{(item.get('content') or '')[:400]}"
+                    for item in relevant
+                ]
+                knowledge_context = "ידע רלוונטי:\n" + "\n".join(blocks)
+        except Exception:  # noqa: BLE001
+            logger.exception("think_node: GEX RAG retrieval failed")
+            knowledge_context = ""
+        state["gex_knowledge_context"] = knowledge_context
+
+    current_turn_parts = [f"הודעת חיים: {state.get('user_message', '')}"]
+    if knowledge_context:
+        current_turn_parts.append(knowledge_context)
+    current_turn_parts.extend(
+        [
+            f"הקשר שוק:\n{context_text}",
+            f"מידע שנאסף בסבבים קודמים:\n{analysis_text}",
+            f"תוצאת הכלי האחרון:\n{last_tool}",
+            f"כלים זמינים:\n{list_tool_descriptions()}",
+            THINK_INSTRUCTIONS,
+        ]
     )
+    current_turn = "\n\n".join(current_turn_parts)
 
     messages_for_claude = history_msgs + [{"role": "user", "content": current_turn}]
 

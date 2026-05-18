@@ -32,6 +32,7 @@ _stock_scanner: Optional[DailyStockScanner] = None
 _market_analyzer = None
 _flow_engine = None
 _wall_detector = None
+_morning_briefing = None
 
 
 def get_smart_news_monitor() -> SmartNewsMonitor:
@@ -70,6 +71,14 @@ def _get_wall_detector():
         from services.wall_break_detector import WallBreakDetector
         _wall_detector = WallBreakDetector()
     return _wall_detector
+
+
+def _get_morning_briefing():
+    global _morning_briefing
+    if _morning_briefing is None:
+        from services.morning_briefing import MorningBriefing
+        _morning_briefing = MorningBriefing()
+    return _morning_briefing
 
 
 # ───────────────────────── helpers ─────────────────────────
@@ -380,6 +389,14 @@ async def job_monitor_unusual_options() -> None:
         logger.exception("unusual_options telegram send failed")
 
 
+async def job_morning_briefing() -> None:
+    """14:00 Israel – scan watchlist + StrategySelector → actionable digest."""
+    try:
+        await _get_morning_briefing().generate_daily_briefing()
+    except Exception:  # noqa: BLE001
+        logger.exception("morning_briefing failed")
+
+
 async def job_daily_gex_report() -> None:
     """14:00 Israel – send GEX+Flow report for SPY/QQQ/SPX."""
     analyzer = _get_market_analyzer()
@@ -635,10 +652,19 @@ def start_scheduler() -> AsyncIOScheduler:
     )
 
     # ───────── GEX + Flow market-structure jobs ─────────
-    # Daily GEX report 14:00 Israel = 11:00 UTC, runs once per session.
+    # Morning briefing 14:00 Israel = 11:00 UTC – actionable strategy digest.
+    _scheduler.add_job(
+        job_morning_briefing,
+        CronTrigger(day_of_week="mon-fri", hour=11, minute=0, timezone=UTC),
+        id="morning_briefing",
+        replace_existing=True,
+        max_instances=1,
+    )
+    # Daily GEX report 14:05 Israel = 11:05 UTC – per-ticker GEX/Flow dump,
+    # offset 5 min so it doesn't share the slot with morning_briefing.
     _scheduler.add_job(
         job_daily_gex_report,
-        CronTrigger(day_of_week="mon-fri", hour=11, minute=0, timezone=UTC),
+        CronTrigger(day_of_week="mon-fri", hour=11, minute=5, timezone=UTC),
         id="daily_gex_report",
         replace_existing=True,
         max_instances=1,

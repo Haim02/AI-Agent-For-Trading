@@ -472,6 +472,240 @@ async def iv_for_ticker(ticker: str) -> dict[str, Any]:
     return _serialize(result)
 
 
+@router.get("/gex/levels/{ticker}")
+async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
+    """GEX key levels + OHLC candles formatted for the frontend chart."""
+    try:
+        import pandas as pd
+        import pytz
+        import yfinance as yf
+
+        ET = pytz.timezone("America/New_York")
+        IL = pytz.timezone("Asia/Jerusalem")
+        now_et = datetime.now(ET)
+
+        # US session: 09:30–16:00 ET, Mon-Fri.
+        market_open_dt = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close_dt = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+        is_market_open = (
+            now_et.weekday() < 5 and market_open_dt <= now_et <= market_close_dt
+        )
+
+        yf_ticker = ticker
+        if ticker.upper() == "SPX":
+            yf_ticker = "^GSPC"
+        elif ticker.upper() == "NDX":
+            yf_ticker = "^NDX"
+        elif ticker.upper() == "VIX":
+            yf_ticker = "^VIX"
+
+        def _fetch_today_1m():
+            t = yf.Ticker(yf_ticker)
+            h = t.history(period="1d", interval="1m", prepost=False)
+            if h.empty or len(h) < 5:
+                # Outside session / weekend / illiquid – use last trading day only.
+                h = t.history(period="5d", interval="1m", prepost=False)
+                if not h.empty:
+                    last_date = h.index[-1].date()
+                    h = h[h.index.date == last_date]
+            return h
+
+        hist = await asyncio.to_thread(_fetch_today_1m)
+
+        # Resample 1m → 5m for a cleaner intraday view.
+        if len(hist) > 10:
+            hist.index = pd.to_datetime(hist.index)
+            hist = hist.resample("5min").agg(
+                {
+                    "Open": "first",
+                    "High": "max",
+                    "Low": "min",
+                    "Close": "last",
+                    "Volume": "sum",
+                }
+            ).dropna()
+
+        candles: list[dict[str, Any]] = []
+        for ts, row in hist.iterrows():
+            try:
+                ts_il = ts.astimezone(IL) if ts.tzinfo else ts
+                ts_et = ts.astimezone(ET) if ts.tzinfo else ts
+                candles.append(
+                    {
+                        "time": int(ts.timestamp()),
+                        "time_il": ts_il.strftime("%H:%M"),
+                        "time_et": ts_et.strftime("%H:%M"),
+                        "open": round(float(row["Open"]), 2),
+                        "high": round(float(row["High"]), 2),
+                        "low": round(float(row["Low"]), 2),
+                        "close": round(float(row["Close"]), 2),
+                        "volume": int(row.get("Volume", 0) or 0),
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                continue
+
+        spot = candles[-1]["close"] if candles else 0.0
+
+        call_wall: Optional[float] = None
+        put_wall: Optional[float] = None
+        gamma_flip: Optional[float] = None
+        top_strikes: list[dict[str, Any]] = []
+        regime = "positive"
+
+        try:
+            from analytics.gex_engine import GEXEngine
+
+            spy_ticker = "SPY" if ticker.upper() == "SPX" else ticker.upper()
+            gex_data = await GEXEngine().get_full_gex_analysis(spy_ticker)
+            if "error" not in gex_data:
+                call_wall = gex_data.get("call_wall")
+                put_wall = gex_data.get("put_wall")
+                gamma_flip = gex_data.get("gamma_flip")
+                top_strikes = gex_data.get("top_strikes") or []
+                regime = gex_data.get("regime") or "positive"
+        except Exception:  # noqa: BLE001
+            logger.exception("gex_levels_chart: GEXEngine failed – falling back to synthetic")
+
+        # Synthetic fallback so the chart always renders something useful.
+        if call_wall is None:
+            call_wall = round(spot * 1.012, 0)
+        if put_wall is None:
+            put_wall = round(spot * 0.990, 0)
+        if gamma_flip is None:
+            gamma_flip = round(spot * 0.998, 0)
+
+        levels: list[dict[str, Any]] = [
+            {
+                "id": "call_wall",
+                "label": f"Call Wall {int(call_wall)}",
+                "price": call_wall,
+                "color": "#22c55e",
+                "style": "solid",
+                "width": 2,
+                "side": "call",
+                "description": "תקרה מבנית – Dealers מוכרים",
+            },
+            {
+                "id": "gamma_flip",
+                "label": f"Gamma Flip {int(gamma_flip)}",
+                "price": gamma_flip,
+                "color": "#f59e0b",
+                "style": "dashed",
+                "width": 2,
+                "side": "flip",
+                "description": "מעבר בין Positive/Negative",
+            },
+            {
+                "id": "put_wall",
+                "label": f"Put Wall {int(put_wall)}",
+                "price": put_wall,
+                "color": "#ef4444",
+                "style": "solid",
+                "width": 2,
+                "side": "put",
+                "description": "רצפה מבנית – Dealers קונים",
+            },
+        ]
+
+        ut_count = 1
+        dt_count = 1
+        for s in top_strikes[:6]:
+            strike = s.get("strike") or 0
+            if not strike:
+                continue
+            if strike > spot and ut_count <= 3:
+                levels.append(
+                    {
+                        "id": f"ut{ut_count}",
+                        "label": f"UT{ut_count} {int(strike)}",
+                        "price": strike,
+                        "color": "#86efac",
+                        "style": "solid",
+                        "width": 1,
+                        "side": "call",
+                        "description": f"GEX Upside Target {ut_count}",
+                    }
+                )
+                ut_count += 1
+            elif strike < spot and dt_count <= 3:
+                levels.append(
+                    {
+                        "id": f"dt{dt_count}",
+                        "label": f"DT{dt_count} {int(strike)}",
+                        "price": strike,
+                        "color": "#fca5a5",
+                        "style": "solid",
+                        "width": 1,
+                        "side": "put",
+                        "description": f"GEX Downside Target {dt_count}",
+                    }
+                )
+                dt_count += 1
+
+        price_step = spot * 0.003
+        call_entry = round(call_wall - price_step, 0)
+        put_entry = round(put_wall + price_step, 0)
+        arrows = [
+            {
+                "id": "call_entry",
+                "label": f"Call above {int(call_entry)}",
+                "price": call_entry,
+                "color": "#4ade80",
+                "direction": "up",
+                "description": "כניסת Call אם מחיר עולה מעל",
+            },
+            {
+                "id": "put_entry",
+                "label": f"Put below {int(put_entry)}",
+                "price": put_entry,
+                "color": "#f87171",
+                "direction": "down",
+                "description": "כניסת Put אם מחיר יורד מתחת",
+            },
+        ]
+
+        if candles:
+            day_open = candles[0]["open"]
+            day_high = max(c["high"] for c in candles)
+            day_low = min(c["low"] for c in candles)
+            day_change = spot - day_open
+            day_change_pct = (day_change / day_open * 100) if day_open else 0.0
+        else:
+            day_open = day_high = day_low = spot
+            day_change = 0.0
+            day_change_pct = 0.0
+
+        return {
+            "ticker": ticker,
+            "spot": spot,
+            "regime": regime,
+            "candles": candles,
+            "levels": levels,
+            "arrows": arrows,
+            "day_info": {
+                "date": now_et.strftime("%d/%m/%Y"),
+                "open": day_open,
+                "high": day_high,
+                "low": day_low,
+                "change": round(day_change, 2),
+                "change_pct": round(day_change_pct, 2),
+                "is_market_open": is_market_open,
+                "session_label": "פתוח" if is_market_open else "סגור",
+                "candle_count": len(candles),
+                "interval": "5m",
+                "timeframe": "0DTE – יום נוכחי",
+            },
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("gex_levels_chart failed for %s", ticker)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/gex/{ticker}")
 async def gex_for_ticker(ticker: str) -> dict[str, Any]:
     requested = ticker.upper().strip()

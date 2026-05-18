@@ -705,6 +705,67 @@ async def get_market_structure(ticker: str = "SPY") -> str:
     return data.get("report_hebrew") or _to_text(data)
 
 
+async def get_strategy_recommendation(
+    ticker: str = "SPY",
+    gex_data: Optional[dict] = None,
+    flow_data: Optional[dict] = None,
+) -> str:
+    """המלצת אסטרטגיה מדויקת לפי GEX+Flow עם Strikes ספציפיים."""
+    ticker = (ticker or "SPY").upper().strip()
+    from analytics.strategy_selector import StrategySelector
+
+    rec = await StrategySelector().select_strategy(
+        ticker=ticker, gex_data=gex_data, flow_data=flow_data
+    )
+
+    confidence = rec.get("confidence") or 0
+    emoji = "🟢🟢" if confidence > 0.90 else "🟢" if confidence > 0.80 else "🟡"
+
+    lines = [
+        f"{emoji} המלצה ל-{ticker} – {str(rec.get('strategy', '?')).upper()}",
+        f"📋 {rec.get('recommendation', '')}",
+        f"💭 {rec.get('reasoning', '')}",
+        f"📊 ביטחון: {confidence * 100:.0f}%",
+        "",
+        f"GEX Regime: {rec.get('gex_regime', '—')} | "
+        f"Profile: {rec.get('gex_profile', '—')} | "
+        f"Flow: {rec.get('flow_sentiment', '—')}",
+        f"IV Rank: {rec.get('iv_rank', '—')} | VIX: {rec.get('vix', '—')}",
+    ]
+
+    strikes = rec.get("strikes") or {}
+    if strikes:
+        lines.append("\n🎯 Strikes:")
+        for key, val in strikes.items():
+            if key in {"type", "width", "call_width", "put_width"}:
+                continue
+            lines.append(f"   {key}: ${val}")
+
+    greeks = rec.get("greeks") or {}
+    if greeks:
+        lines.append("\n🔬 Greeks (אומדן):")
+        lines.append(
+            f"   Δ={greeks.get('delta', 0):.2f} | "
+            f"Θ/יום={greeks.get('theta_per_day', 0):.2f} | "
+            f"V={greeks.get('vega', 0):.2f} | "
+            f"prob={greeks.get('probability', 0) * 100:.0f}%"
+        )
+
+    rr = rec.get("risk_reward") or {}
+    if rr:
+        lines.append("\n💰 סיכון/סיכוי:")
+        for k, v in rr.items():
+            lines.append(f"   {k}: {v}")
+
+    actions = rec.get("action_items") or []
+    if actions:
+        lines.append("\n✅ צעדים:")
+        for action in actions:
+            lines.append(f"   • {action}")
+
+    return "\n".join(lines)
+
+
 async def check_wall_status(ticker: str = "SPY") -> str:
     """בודק אם ה-Walls נשמרים או נשברו לאחרונה."""
     ticker = (ticker or "SPY").upper().strip()
@@ -1057,6 +1118,11 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
         "check_wall_status",
         "בודק אם ה-Walls נשמרים או נשברו לאחרונה",
         check_wall_status,
+    ),
+    "get_strategy_recommendation": AgentTool(
+        "get_strategy_recommendation",
+        "מחזיר המלצת אסטרטגיה מדויקת לפי GEX+Flow עם Strikes ספציפיים",
+        get_strategy_recommendation,
     ),
     "get_real_greeks": AgentTool(
         "get_real_greeks",

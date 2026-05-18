@@ -5,6 +5,7 @@ import Sidebar from "./components/layout/Sidebar";
 import Analytics from "./pages/Analytics";
 import Chat from "./pages/Chat";
 import Dashboard from "./pages/Dashboard";
+import GEXChart from "./pages/GEXChart";
 import Journal from "./pages/Journal";
 import Positions from "./pages/Positions";
 import Scanner from "./pages/Scanner";
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="/positions" element={<Positions />} />
             <Route path="/journal" element={<Journal />} />
             <Route path="/scanner" element={<Scanner />} />
+            <Route path="/chart" element={<GEXChart />} />
             <Route path="/chat" element={<Chat />} />
             <Route path="/analytics" element={<Analytics />} />
           </Routes>

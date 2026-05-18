@@ -36,6 +36,13 @@ async def lifespan(app: FastAPI):
         logger.warning("MongoDB connection FAILED — endpoints will error until DB is reachable")
 
     try:
+        from memory.gex_knowledge_loader import GEXKnowledgeLoader
+        count = await GEXKnowledgeLoader().load_all_knowledge()
+        logger.info("✅ GEX Knowledge loaded: %d items", count)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("GEX Knowledge load failed: %s", exc)
+
+    try:
         await get_autonomous_agent().warm_up()
         logger.info("🤖 סוכן אוטונומי מוכן לפעולה")
     except Exception:  # noqa: BLE001

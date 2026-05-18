@@ -3,6 +3,7 @@ import {
   BarChart2,
   Calendar,
   LayoutDashboard,
+  LineChart,
   MessageCircle,
   Search,
   TrendingUp,
@@ -13,6 +14,7 @@ const NAV_ITEMS = [
   { to: "/positions", label: "פוזיציות", icon: TrendingUp },
   { to: "/journal", label: "יומן", icon: Calendar },
   { to: "/scanner", label: "סורק", icon: Search },
+  { to: "/chart", label: "GEX Chart", icon: LineChart },
   { to: "/chat", label: "צ'אט", icon: MessageCircle },
   { to: "/analytics", label: "דשבורד אנליטיקס", icon: BarChart2 },
 ];
