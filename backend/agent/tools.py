@@ -642,38 +642,118 @@ async def get_unusual_options(min_volume: int = 1000) -> str:
 
 
 async def get_options_flow(ticker: str) -> str:
-    """מציג תזרים אופציות בזמן אמת למניה ספציפית."""
+    """מחזיר תזרים אופציות עם Sweeps ו-Blocks בזמן אמת (OptionsFlowEngine)."""
     ticker = (ticker or "").upper().strip()
     if not ticker:
         return "❌ חסר ticker."
-    massive = MassiveTool()
-    try:
-        data = await massive.get_options_flow(ticker)
-    finally:
-        await massive.close()
+    from analytics.flow_engine import OptionsFlowEngine
+
+    data = await OptionsFlowEngine().analyze_ticker_flow(ticker)
     if not data:
         return f"📊 אין נתוני תזרים אופציות עבור {ticker} כרגע."
+
     sentiment_he = {
         "bullish": "🟢 שורי",
         "bearish": "🔴 דובי",
         "neutral": "🟡 ניטרלי",
-    }.get(data.get("sentiment", "neutral"), "🟡 ניטרלי")
-    largest = data.get("largest_trade") or {}
-    largest_text = (
-        f"{largest.get('type', '?').upper()} ${largest.get('strike', '?')} "
-        f"גודל {largest.get('size', '?')} פרמיה ${float(largest.get('premium', 0) or 0):,.0f}"
-        if largest
-        else "—"
-    )
-    return (
-        f"📊 תזרים אופציות – {ticker}\n"
-        f"סנטימנט: {sentiment_he}\n"
-        f"🟢 Calls Volume: {data.get('calls_volume', 0):,}\n"
-        f"🔴 Puts Volume: {data.get('puts_volume', 0):,}\n"
-        f"יחס C/P: {data.get('call_put_ratio', 0)}\n"
-        f"סך עסקאות: {data.get('total_trades', 0)}\n"
-        f"⭐ עסקה גדולה: {largest_text}"
-    )
+    }.get(data.get("overall_sentiment", "neutral"), "🟡 ניטרלי")
+
+    lines = [
+        f"📊 תזרים אופציות – {ticker}",
+        f"סנטימנט: {sentiment_he}",
+        f"🟢 שורי: {data.get('bull_pct', 0):.0f}% ({data.get('bullish_trades', 0)} עסקאות)",
+        f"🔴 דובי: {data.get('bear_pct', 0):.0f}% ({data.get('bearish_trades', 0)} עסקאות)",
+    ]
+    sweeps = data.get("sweeps") or []
+    if sweeps:
+        lines.append("\n⚡ Sweeps עיקריים:")
+        for s in sweeps[:3]:
+            arrow = "🟢" if s.get("sentiment") == "bullish" else "🔴"
+            premium = s.get("premium") or 0
+            lines.append(
+                f"{arrow} ${s.get('strike', '?')} exp {s.get('expiry', '?')} – ${premium:,}"
+            )
+    blocks = data.get("blocks") or []
+    if blocks:
+        lines.append("\n🏦 Blocks (Smart Money):")
+        for b in blocks[:3]:
+            arrow = "🟢" if b.get("sentiment") == "bullish" else "🔴"
+            premium = b.get("premium") or 0
+            lines.append(
+                f"{arrow} ${b.get('strike', '?')} exp {b.get('expiry', '?')} – ${premium:,}"
+            )
+    return "\n".join(lines)
+
+
+async def get_gex_analysis(ticker: str = "SPY") -> str:
+    """ניתוח GEX מלא: Call Wall, Put Wall, Gamma Flip, משטר, פרופיל ואסטרטגיה."""
+    ticker = (ticker or "SPY").upper().strip()
+    from analytics.gex_engine import GEXEngine
+
+    data = await GEXEngine().get_full_gex_analysis(ticker)
+    if "error" in data:
+        return f"❌ {ticker}: {data['error']}"
+    return data.get("analysis_hebrew") or _to_text(data)
+
+
+async def get_market_structure(ticker: str = "SPY") -> str:
+    """ניתוח מבנה שוק מלא: GEX + Flow + אסטרטגיה."""
+    ticker = (ticker or "SPY").upper().strip()
+    from analytics.market_structure import MarketStructureAnalyzer
+
+    data = await MarketStructureAnalyzer().get_daily_report(ticker)
+    return data.get("report_hebrew") or _to_text(data)
+
+
+async def check_wall_status(ticker: str = "SPY") -> str:
+    """בודק אם ה-Walls נשמרים או נשברו לאחרונה."""
+    ticker = (ticker or "SPY").upper().strip()
+    from analytics.gex_engine import GEXEngine
+
+    gex = await GEXEngine().get_full_gex_analysis(ticker)
+    if "error" in gex:
+        return f"❌ {ticker}: {gex['error']}"
+
+    spot = gex.get("spot_price")
+    cw = gex.get("call_wall")
+    pw = gex.get("put_wall")
+    gf = gex.get("gamma_flip")
+    cw_dist = gex.get("call_wall_distance_pct")
+    pw_dist = gex.get("put_wall_distance_pct")
+
+    status_lines: list[str] = [f"🧱 סטטוס Walls – {ticker}", f"💰 ספוט: ${spot:,.2f}"]
+    if cw is not None:
+        broken = isinstance(spot, (int, float)) and isinstance(cw, (int, float)) and spot >= cw
+        marker = "🚨 נשבר!" if broken else "✅ מחזיק"
+        status_lines.append(f"🟢 Call Wall ${cw:,.0f} ({cw_dist:+.2f}%) – {marker}")
+    if pw is not None:
+        broken = isinstance(spot, (int, float)) and isinstance(pw, (int, float)) and spot <= pw
+        marker = "🚨 נשבר!" if broken else "✅ מחזיק"
+        status_lines.append(f"🔴 Put Wall ${pw:,.0f} (-{pw_dist:.2f}%) – {marker}")
+    if gf is not None:
+        side = "מעל" if isinstance(spot, (int, float)) and spot > gf else "מתחת"
+        status_lines.append(f"⚡ Gamma Flip: ${gf:,.0f} (המחיר {side})")
+
+    db = get_db()
+    try:
+        cutoff = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        recent = await db.wall_breaks.find(
+            {"ticker": ticker, "timestamp": {"$gte": cutoff}}
+        ).sort("timestamp", -1).to_list(length=5)
+    except Exception:  # noqa: BLE001
+        logger.exception("check_wall_status: db query failed")
+        recent = []
+
+    if recent:
+        status_lines.append("\n📜 שבירות היום:")
+        for r in recent:
+            ts = r.get("timestamp")
+            ts_text = ts.strftime("%H:%M") if hasattr(ts, "strftime") else "—"
+            status_lines.append(f"• [{ts_text}] {r.get('type', '?')} @ ${r.get('spot', 0):,.2f}")
+    else:
+        status_lines.append("\n📜 לא נרשמו שבירות היום.")
+
+    return "\n".join(status_lines)
 
 
 async def get_real_greeks(option_symbol: str) -> str:
@@ -960,8 +1040,23 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
     ),
     "get_options_flow": AgentTool(
         "get_options_flow",
-        "מציג תזרים אופציות בזמן אמת למניה ספציפית",
+        "מחזיר תזרים אופציות עם Sweeps ו-Blocks בזמן אמת",
         get_options_flow,
+    ),
+    "get_gex_analysis": AgentTool(
+        "get_gex_analysis",
+        "מחזיר ניתוח GEX מלא: Call Wall, Put Wall, Gamma Flip, משטר, פרופיל ואסטרטגיה",
+        get_gex_analysis,
+    ),
+    "get_market_structure": AgentTool(
+        "get_market_structure",
+        "ניתוח מבנה שוק מלא: GEX + Flow + אסטרטגיה",
+        get_market_structure,
+    ),
+    "check_wall_status": AgentTool(
+        "check_wall_status",
+        "בודק אם ה-Walls נשמרים או נשברו לאחרונה",
+        check_wall_status,
     ),
     "get_real_greeks": AgentTool(
         "get_real_greeks",

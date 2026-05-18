@@ -29,6 +29,9 @@ _telegram: Optional[TelegramService] = None
 _news_monitor: Optional[NewsMonitor] = None
 _smart_monitor: Optional[SmartNewsMonitor] = None
 _stock_scanner: Optional[DailyStockScanner] = None
+_market_analyzer = None
+_flow_engine = None
+_wall_detector = None
 
 
 def get_smart_news_monitor() -> SmartNewsMonitor:
@@ -43,6 +46,30 @@ def get_daily_stock_scanner() -> DailyStockScanner:
     if _stock_scanner is None:
         _stock_scanner = DailyStockScanner()
     return _stock_scanner
+
+
+def _get_market_analyzer():
+    global _market_analyzer
+    if _market_analyzer is None:
+        from analytics.market_structure import MarketStructureAnalyzer
+        _market_analyzer = MarketStructureAnalyzer()
+    return _market_analyzer
+
+
+def _get_flow_engine():
+    global _flow_engine
+    if _flow_engine is None:
+        from analytics.flow_engine import OptionsFlowEngine
+        _flow_engine = OptionsFlowEngine()
+    return _flow_engine
+
+
+def _get_wall_detector():
+    global _wall_detector
+    if _wall_detector is None:
+        from services.wall_break_detector import WallBreakDetector
+        _wall_detector = WallBreakDetector()
+    return _wall_detector
 
 
 # ───────────────────────── helpers ─────────────────────────
@@ -353,6 +380,72 @@ async def job_monitor_unusual_options() -> None:
         logger.exception("unusual_options telegram send failed")
 
 
+async def job_daily_gex_report() -> None:
+    """14:00 Israel – send GEX+Flow report for SPY/QQQ/SPX."""
+    analyzer = _get_market_analyzer()
+    tg = _telegram_service()
+    for ticker in ["SPY", "QQQ", "SPX"]:
+        try:
+            report = await analyzer.get_daily_report(ticker)
+        except Exception:  # noqa: BLE001
+            logger.exception("daily_gex_report: failed for %s", ticker)
+            continue
+        if tg is None:
+            continue
+        try:
+            await tg.send_alert(
+                title=f"📊 ניתוח GEX יומי – {ticker}",
+                body=report.get("report_hebrew") or "(אין דוח)",
+                urgency="medium",
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("daily_gex_report: telegram failed for %s", ticker)
+
+
+async def job_wall_break_check() -> None:
+    """Every 5 min during market hours – watch SPY for Wall/Flip crosses."""
+    try:
+        await _get_wall_detector().check_for_breaks("SPY")
+    except Exception:  # noqa: BLE001
+        logger.exception("wall_break_check failed")
+
+
+async def job_unusual_flow_check() -> None:
+    """Every 15 min – $500k+ sweeps/blocks, top 3 alerted."""
+    try:
+        flows = await _get_flow_engine().get_unusual_flow(min_premium=500_000)
+    except Exception:  # noqa: BLE001
+        logger.exception("unusual_flow: fetch failed")
+        return
+    if not flows:
+        return
+    top = sorted(flows, key=lambda x: x.get("premium", 0) or 0, reverse=True)[:3]
+    tg = _telegram_service()
+    if tg is None:
+        return
+    for trade in top:
+        direction = "🟢 שורי" if trade.get("sentiment") == "bullish" else "🔴 דובי"
+        trade_type = (
+            "⚡ SWEEP – דחיפות גבוהה!"
+            if trade.get("trade_type") == "sweep"
+            else "🏦 BLOCK – Smart Money"
+        )
+        premium = trade.get("premium") or 0
+        size = trade.get("size") or 0
+        body = (
+            f"🚨 {trade_type}\n\n"
+            f"💹 {trade.get('ticker', '?')} {direction}\n"
+            f"🎯 Strike: ${trade.get('strike', '?')}\n"
+            f"📅 פקיעה: {trade.get('expiry', '?')}\n"
+            f"💰 פרמיה: ${premium:,}\n"
+            f"📊 גודל: {size} חוזים"
+        )
+        try:
+            await tg.send_alert(title="🐋 Unusual Flow!", body=body, urgency="high")
+        except Exception:  # noqa: BLE001
+            logger.exception("unusual_flow: telegram failed")
+
+
 async def job_daily_summary() -> None:
     try:
         db = get_db()
@@ -537,6 +630,32 @@ def start_scheduler() -> AsyncIOScheduler:
         job_daily_stock_scan,
         CronTrigger(day_of_week="mon-fri", hour=11, minute=0, timezone=UTC),
         id="pre_market_scan",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # ───────── GEX + Flow market-structure jobs ─────────
+    # Daily GEX report 14:00 Israel = 11:00 UTC, runs once per session.
+    _scheduler.add_job(
+        job_daily_gex_report,
+        CronTrigger(day_of_week="mon-fri", hour=11, minute=0, timezone=UTC),
+        id="daily_gex_report",
+        replace_existing=True,
+        max_instances=1,
+    )
+    # Wall-break watcher every 5 min during US session = 13–20 UTC (16:30–23:00 IL).
+    _scheduler.add_job(
+        job_wall_break_check,
+        CronTrigger(day_of_week="mon-fri", hour="13-20", minute="*/5", timezone=UTC),
+        id="wall_break_check",
+        replace_existing=True,
+        max_instances=1,
+    )
+    # Unusual flow $500k+ every 15 min during US session.
+    _scheduler.add_job(
+        job_unusual_flow_check,
+        CronTrigger(day_of_week="mon-fri", hour="13-20", minute="*/15", timezone=UTC),
+        id="unusual_flow",
         replace_existing=True,
         max_instances=1,
     )
