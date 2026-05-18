@@ -261,13 +261,19 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             text, session_id=session_id, conversation_history=history
         )
         logger.info("Agent response: %s", response)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("on_message: agent failed for chat %s – using ChatAgent fallback", chat_id)
+    except Exception:  # noqa: BLE001
+        import traceback
+        logger.error(
+            "Agent error for msg %r:\n%s", text, traceback.format_exc()
+        )
         try:
             response = await _fallback_claude_chat(history, text)
         except Exception:  # noqa: BLE001
             logger.exception("on_message: ChatAgent fallback also failed")
-            response = "מצטער חיים, הייתה שגיאה. נסה שוב."
+            response = (
+                "נתקלתי בבעיה. נסה לשאול שוב, או נסח אחרת.\n"
+                "לדוגמה: 'GEX של SPY' במקום SPX."
+            )
 
     clean_text = clean_response(response or "")
     add_to_history(chat_id, "assistant", clean_text)

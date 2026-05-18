@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import traceback
 from datetime import datetime
 from typing import Any, Optional
 
@@ -18,6 +19,22 @@ import httpx
 from utils.time_helper import ISRAEL_TZ
 
 logger = logging.getLogger(__name__)
+
+
+# Index tickers don't have tradeable options chains on yfinance / Massive –
+# substitute their tracking ETF for the chain query but keep the original
+# label so the user sees what they asked for.
+TICKER_MAP: dict[str, str] = {
+    "SPX": "SPY",
+    "NDX": "QQQ",
+    "RUT": "IWM",
+    "VIX": "UVXY",
+    "DJI": "DIA",
+    "^GSPC": "SPY",
+    "^NDX": "QQQ",
+    "^RUT": "IWM",
+    "^VIX": "UVXY",
+}
 
 
 class GEXEngine:
@@ -37,83 +54,186 @@ class GEXEngine:
     # ───────────────────────── public ─────────────────────────
 
     async def get_full_gex_analysis(self, ticker: str = "SPY") -> dict:
-        chain = await self._get_options_chain(ticker)
-        source = "MassiveAPI"
-        if not chain:
-            chain = self._get_chain_yfinance(ticker)
-            source = "yfinance"
-        if not chain:
-            return {"error": f"No data for {ticker}"}
+        original_ticker = (ticker or "SPY").upper().strip()
+        options_ticker = TICKER_MAP.get(original_ticker, original_ticker)
+        logger.info(
+            "GEX analysis started: %s → using %s for options",
+            original_ticker, options_ticker,
+        )
 
-        spot = float(chain.get("spot_price") or 0.0)
-        options = chain.get("options") or []
-        if spot <= 0 or not options:
-            return {"error": f"Incomplete chain for {ticker}"}
+        try:
+            chain = await self._get_options_chain(options_ticker)
+            source = "MassiveAPI"
+            if not chain:
+                chain = self._get_chain_yfinance(options_ticker)
+                source = "yfinance"
 
-        gex_by_strike: dict[float, float] = {}
-        for opt in options:
-            strike = opt.get("strike")
-            gamma = opt.get("gamma") or 0
-            oi = opt.get("open_interest") or 0
-            opt_type = (opt.get("type") or "").lower()
-            if strike is None:
-                continue
+            if not chain:
+                logger.warning(
+                    "All data sources failed for %s. Using estimated levels.",
+                    options_ticker,
+                )
+                return self._estimated_fallback(original_ticker, options_ticker)
 
-            gex_value = float(gamma) * float(oi) * 100 * (spot ** 2)
-            if opt_type == "call":
-                gex_value = abs(gex_value)
-            else:
-                gex_value = -abs(gex_value)
+            spot = float(chain.get("spot_price") or 0.0)
+            options = chain.get("options") or []
+            if spot <= 0 or not options:
+                logger.warning(
+                    "Incomplete chain for %s (spot=%s, n_options=%d) – using estimated",
+                    options_ticker, spot, len(options),
+                )
+                return self._estimated_fallback(original_ticker, options_ticker)
 
-            gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + gex_value
+            gex_by_strike: dict[float, float] = {}
+            for opt in options:
+                strike = opt.get("strike")
+                gamma = opt.get("gamma") or 0
+                oi = opt.get("open_interest") or 0
+                opt_type = (opt.get("type") or "").lower()
+                if strike is None:
+                    continue
 
-        if not gex_by_strike:
-            return {"error": "No GEX data calculated"}
+                gex_value = float(gamma) * float(oi) * 100 * (spot ** 2)
+                if opt_type == "call":
+                    gex_value = abs(gex_value)
+                else:
+                    gex_value = -abs(gex_value)
 
-        # Call Wall: max positive GEX at/above spot.
-        call_gex = {s: v for s, v in gex_by_strike.items() if s >= spot and v > 0}
-        call_wall = max(call_gex, key=call_gex.get, default=None) if call_gex else None
+                gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + gex_value
 
-        # Put Wall: max negative GEX at/below spot.
-        put_gex = {s: v for s, v in gex_by_strike.items() if s <= spot and v < 0}
-        put_wall = min(put_gex, key=put_gex.get, default=None) if put_gex else None
+            if not gex_by_strike or all(v == 0 for v in gex_by_strike.values()):
+                # yfinance returns rows without gamma → every GEX value is 0.
+                # Treat that as no-data and fall back to estimates.
+                logger.warning(
+                    "No usable GEX values for %s (source=%s) – using estimated",
+                    options_ticker, source,
+                )
+                return self._estimated_fallback(original_ticker, options_ticker, spot=spot)
 
-        gamma_flip = self._find_gamma_flip(gex_by_strike, spot)
-        total_gex = sum(gex_by_strike.values())
-        regime = "positive" if total_gex > 0 else "negative"
-        gex_profile = self._classify_profile(gex_by_strike, spot, call_wall, put_wall)
+            # Call Wall: max positive GEX at/above spot.
+            call_gex = {s: v for s, v in gex_by_strike.items() if s >= spot and v > 0}
+            call_wall = max(call_gex, key=call_gex.get, default=None) if call_gex else None
 
-        cw_dist = ((call_wall - spot) / spot * 100) if call_wall else None
-        pw_dist = ((spot - put_wall) / spot * 100) if put_wall else None
+            # Put Wall: max negative GEX at/below spot.
+            put_gex = {s: v for s, v in gex_by_strike.items() if s <= spot and v < 0}
+            put_wall = min(put_gex, key=put_gex.get, default=None) if put_gex else None
 
-        analysis_hebrew = self._generate_analysis_hebrew(
-            ticker=ticker,
-            spot=spot,
-            call_wall=call_wall,
-            put_wall=put_wall,
-            gamma_flip=gamma_flip,
-            regime=regime,
-            gex_profile=gex_profile,
-            cw_dist=cw_dist,
-            pw_dist=pw_dist,
+            gamma_flip = self._find_gamma_flip(gex_by_strike, spot)
+            total_gex = sum(gex_by_strike.values())
+            regime = "positive" if total_gex > 0 else "negative"
+            gex_profile = self._classify_profile(gex_by_strike, spot, call_wall, put_wall)
+
+            cw_dist = ((call_wall - spot) / spot * 100) if call_wall else None
+            pw_dist = ((spot - put_wall) / spot * 100) if put_wall else None
+
+            analysis_hebrew = self._generate_analysis_hebrew(
+                ticker=original_ticker,
+                spot=spot,
+                call_wall=call_wall,
+                put_wall=put_wall,
+                gamma_flip=gamma_flip,
+                regime=regime,
+                gex_profile=gex_profile,
+                cw_dist=cw_dist,
+                pw_dist=pw_dist,
+            )
+
+            return {
+                "ticker": original_ticker,
+                "options_ticker": options_ticker,
+                "spot_price": round(spot, 2),
+                "call_wall": round(call_wall, 0) if call_wall else None,
+                "put_wall": round(put_wall, 0) if put_wall else None,
+                "gamma_flip": round(gamma_flip, 0) if gamma_flip else None,
+                "call_wall_distance_pct": round(cw_dist, 2) if cw_dist is not None else None,
+                "put_wall_distance_pct": round(pw_dist, 2) if pw_dist is not None else None,
+                "regime": regime,
+                "total_gex": round(total_gex / 1e9, 3),
+                "gex_profile": gex_profile,
+                "top_strikes": self._get_top_strikes(gex_by_strike, spot),
+                "analysis_hebrew": analysis_hebrew,
+                "timestamp": datetime.now(ISRAEL_TZ).strftime("%H:%M | %d/%m/%Y"),
+                "source": source,
+            }
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "GEX FULL ERROR for %s:\n%s", original_ticker, traceback.format_exc()
+            )
+            return {
+                "error": str(exc),
+                "ticker": original_ticker,
+                "spot_price": 0,
+            }
+
+    # ───────────────────────── estimated fallback ─────────────────────────
+
+    def _estimated_fallback(
+        self, original_ticker: str, options_ticker: str, spot: Optional[float] = None
+    ) -> dict:
+        """Return ±2% wall estimates when no live options chain is available."""
+        if spot is None or spot <= 0:
+            spot = self._lookup_spot(original_ticker, options_ticker) or 0.0
+        if spot <= 0:
+            # Coarse fallback so the chart still renders.
+            spot = 5500.0 if original_ticker == "SPX" else 500.0
+
+        call_wall = round(spot * 1.020, 0)
+        put_wall = round(spot * 0.980, 0)
+        gamma_flip = round(spot * 0.998, 0)
+
+        analysis_hebrew = (
+            f"📊 ניתוח GEX – {original_ticker}\n"
+            f"💰 ספוט: ${spot:,.2f}\n\n"
+            "⚠️ נתונים משוערים (אין גישה לאופציות)\n\n"
+            f"🟢 Call Wall (משוער): ${call_wall:,.0f}\n"
+            f"🔴 Put Wall (משוער): ${put_wall:,.0f}\n"
+            f"⚡ Gamma Flip (משוער): ${gamma_flip:,.0f}\n\n"
+            "💡 לנתונים מדויקים יותר:\n"
+            "השתמש ב-SPY במקום SPX"
         )
 
         return {
-            "ticker": ticker,
+            "ticker": original_ticker,
+            "options_ticker": options_ticker,
             "spot_price": round(spot, 2),
-            "call_wall": round(call_wall, 0) if call_wall else None,
-            "put_wall": round(put_wall, 0) if put_wall else None,
-            "gamma_flip": round(gamma_flip, 0) if gamma_flip else None,
-            "call_wall_distance_pct": round(cw_dist, 2) if cw_dist is not None else None,
-            "put_wall_distance_pct": round(pw_dist, 2) if pw_dist is not None else None,
-            "regime": regime,
-            "total_gex": round(total_gex / 1e9, 3),
-            "gex_profile": gex_profile,
-            "top_strikes": self._get_top_strikes(gex_by_strike, spot),
+            "call_wall": call_wall,
+            "put_wall": put_wall,
+            "gamma_flip": gamma_flip,
+            "call_wall_distance_pct": 2.0,
+            "put_wall_distance_pct": 2.0,
+            "regime": "positive",
+            "total_gex": 0,
+            "gex_profile": "wall",
+            "top_strikes": [],
             "analysis_hebrew": analysis_hebrew,
             "timestamp": datetime.now(ISRAEL_TZ).strftime("%H:%M | %d/%m/%Y"),
-            "source": source,
+            "source": "estimated",
+            "warning": "estimated_levels",
         }
+
+    @staticmethod
+    def _lookup_spot(original_ticker: str, options_ticker: str) -> Optional[float]:
+        """Best-effort spot lookup via yfinance for the estimated fallback."""
+        try:
+            import yfinance as yf
+
+            yf_sym = {
+                "SPX": "^GSPC",
+                "NDX": "^NDX",
+                "RUT": "^RUT",
+                "VIX": "^VIX",
+                "DJI": "^DJI",
+            }.get(original_ticker, options_ticker)
+            hist = yf.Ticker(yf_sym).history(period="1d")
+            if hist.empty:
+                hist = yf.Ticker(yf_sym).history(period="5d")
+            if hist.empty:
+                return None
+            return float(hist["Close"].iloc[-1])
+        except Exception:  # noqa: BLE001
+            logger.exception("estimated fallback spot lookup failed")
+            return None
 
     # ───────────────────────── internals ─────────────────────────
 
@@ -275,39 +395,68 @@ class GEXEngine:
             import yfinance as yf
 
             t = yf.Ticker(ticker)
-            history = t.history(period="1d")
-            if history.empty:
+
+            try:
+                hist = t.history(period="1d")
+                if hist.empty:
+                    hist = t.history(period="5d")
+                if hist.empty:
+                    logger.error("No price history for %s", ticker)
+                    return None
+                spot = float(hist["Close"].iloc[-1])
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Price fetch error for %s: %s", ticker, exc)
                 return None
-            spot = float(history["Close"].iloc[-1])
+
+            try:
+                expirations = t.options
+            except Exception as exc:  # noqa: BLE001
+                logger.error("No options for %s: %s", ticker, exc)
+                return None
+            if not expirations:
+                logger.warning("Empty options for %s", ticker)
+                return None
 
             options: list[dict[str, Any]] = []
-            for exp in (t.options or [])[:5]:
+            for exp in expirations[:4]:
                 try:
                     chain = t.option_chain(exp)
-                except Exception:  # noqa: BLE001
-                    logger.exception("yfinance: option_chain(%s) failed for %s", exp, ticker)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("yfinance: option_chain(%s) for %s failed: %s", exp, ticker, exc)
                     continue
+
                 for _, row in chain.calls.iterrows():
+                    gamma = row.get("gamma", 0)
+                    oi = row.get("openInterest", 0)
                     options.append(
                         {
                             "strike": float(row["strike"]),
-                            "gamma": row.get("gamma", 0) or 0,
-                            "open_interest": row.get("openInterest", 0) or 0,
+                            "gamma": float(gamma or 0),
+                            "open_interest": int(oi or 0),
                             "type": "call",
                         }
                     )
                 for _, row in chain.puts.iterrows():
+                    gamma = row.get("gamma", 0)
+                    oi = row.get("openInterest", 0)
                     options.append(
                         {
                             "strike": float(row["strike"]),
-                            "gamma": row.get("gamma", 0) or 0,
-                            "open_interest": row.get("openInterest", 0) or 0,
+                            "gamma": float(gamma or 0),
+                            "open_interest": int(oi or 0),
                             "type": "put",
                         }
                     )
+
+            if not options:
+                logger.error("No options data parsed for %s", ticker)
+                return None
+
+            logger.info("yfinance: %s spot=%s options=%d", ticker, spot, len(options))
             return {"spot_price": spot, "options": options}
-        except Exception as exc:  # noqa: BLE001
-            logger.error("yfinance failed: %s", exc)
+
+        except Exception:  # noqa: BLE001
+            logger.error("yfinance FULL ERROR %s:\n%s", ticker, traceback.format_exc())
             return None
 
 

@@ -688,12 +688,29 @@ async def get_options_flow(ticker: str) -> str:
 async def get_gex_analysis(ticker: str = "SPY") -> str:
     """ניתוח GEX מלא: Call Wall, Put Wall, Gamma Flip, משטר, פרופיל ואסטרטגיה."""
     ticker = (ticker or "SPY").upper().strip()
-    from analytics.gex_engine import GEXEngine
+    try:
+        from analytics.gex_engine import GEXEngine
 
-    data = await GEXEngine().get_full_gex_analysis(ticker)
+        data = await GEXEngine().get_full_gex_analysis(ticker)
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        logger.error("Tool GEX error:\n%s", traceback.format_exc())
+        return (
+            f"שגיאה טכנית בניתוח GEX ל-{ticker}.\n"
+            "נסה שוב או השתמש ב-SPY."
+        )
+
     if "error" in data:
-        return f"❌ {ticker}: {data['error']}"
-    return data.get("analysis_hebrew") or _to_text(data)
+        return (
+            f"לא ניתן לקבל נתוני GEX ל-{ticker}.\n"
+            f"נסה: SPY (במקום SPX) או QQQ.\n"
+            f"שגיאה: {data['error']}"
+        )
+
+    body = data.get("analysis_hebrew") or _to_text(data)
+    if data.get("warning") == "estimated_levels":
+        return body + "\n\n⚠️ שים לב: נתונים משוערים בלבד"
+    return body
 
 
 async def get_market_structure(ticker: str = "SPY") -> str:
