@@ -1016,3 +1016,50 @@ async def massive_gex(ticker: str) -> dict[str, Any]:
 async def massive_iv_rank(ticker: str) -> dict[str, Any]:
     ticker = ticker.upper().strip()
     return await _with_massive(lambda m: m.get_precise_iv_rank(ticker))
+
+
+# ───────────────────────── Unusual Whales scraper ─────────────────────────
+
+@router.get("/uw/report/{ticker}")
+async def get_uw_report(ticker: str = "SPY") -> dict[str, Any]:
+    """Full GEX + Flow + Market Tide + News snapshot from Unusual Whales."""
+    from scrapers.uw_scraper import UnusualWhalesScraper
+    scraper = UnusualWhalesScraper()
+    try:
+        return await scraper.get_full_report(ticker.upper().strip())
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("uw_report failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        await scraper.close()
+
+
+@router.get("/uw/flow")
+async def get_uw_flow(ticker: Optional[str] = Query(default=None)) -> dict[str, Any]:
+    """Options flow alerts from Unusual Whales. ``ticker`` is optional."""
+    from scrapers.uw_scraper import UnusualWhalesScraper
+    scraper = UnusualWhalesScraper()
+    try:
+        data = await scraper.get_options_flow(
+            ticker.upper().strip() if ticker else None
+        )
+        return {"flow": data}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("uw_flow failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        await scraper.close()
+
+
+@router.get("/uw/market-tide")
+async def get_uw_market_tide() -> dict[str, Any]:
+    """Aggregate call/put premium tide from Unusual Whales."""
+    from scrapers.uw_scraper import UnusualWhalesScraper
+    scraper = UnusualWhalesScraper()
+    try:
+        return await scraper.get_market_tide()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("uw_market_tide failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        await scraper.close()

@@ -26,11 +26,31 @@ class OptionsFlowEngine:
     # ───────────────────────── public ─────────────────────────
 
     async def get_unusual_flow(self, min_premium: int = 100_000) -> list[dict]:
+        if os.getenv("UW_EMAIL"):
+            scraped = await self._get_uw_scraper_flow()
+            if scraped:
+                return [t for t in scraped if (t.get("premium") or 0) >= min_premium]
         if self.uw_key:
             result = await self._get_uw_flow()
             if result:
                 return [t for t in result if t.get("premium", 0) >= min_premium]
         return await self._get_massive_flow(min_premium)
+
+    async def _get_uw_scraper_flow(self) -> list[dict]:
+        """Use the Playwright-based UW scraper to pull market-wide flow alerts."""
+        try:
+            from scrapers.uw_scraper import UnusualWhalesScraper
+        except ImportError as exc:
+            logger.warning("UW scraper unavailable: %s", exc)
+            return []
+        scraper = UnusualWhalesScraper()
+        try:
+            return await scraper.get_options_flow()
+        except Exception:  # noqa: BLE001
+            logger.exception("UW scraper flow failed")
+            return []
+        finally:
+            await scraper.close()
 
     async def analyze_ticker_flow(self, ticker: str) -> dict:
         if self.uw_key:

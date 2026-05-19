@@ -62,6 +62,12 @@ class GEXEngine:
         )
 
         try:
+            # Primary source: Unusual Whales (logged-in scraper) when configured.
+            if os.getenv("UW_EMAIL"):
+                uw_result = await self._try_uw_gex(original_ticker, options_ticker)
+                if uw_result is not None:
+                    return uw_result
+
             chain = await self._get_options_chain(options_ticker)
             source = "MassiveAPI"
             if not chain:
@@ -165,6 +171,63 @@ class GEXEngine:
                 "ticker": original_ticker,
                 "spot_price": 0,
             }
+
+    # ───────────────────────── UW primary source ─────────────────────────
+
+    async def _try_uw_gex(
+        self, original_ticker: str, options_ticker: str
+    ) -> Optional[dict]:
+        """Pull GEX from the Unusual Whales scraper. Returns None on failure."""
+        try:
+            from scrapers.uw_scraper import UnusualWhalesScraper
+        except ImportError as exc:
+            logger.warning("UW scraper unavailable: %s", exc)
+            return None
+
+        scraper = UnusualWhalesScraper()
+        try:
+            uw_data = await scraper.get_gex_data(options_ticker)
+        except Exception:  # noqa: BLE001
+            logger.exception("UW scraper raised")
+            return None
+        finally:
+            await scraper.close()
+
+        if not uw_data or "error" in uw_data:
+            logger.warning(
+                "UW GEX returned no usable data for %s (err=%s)",
+                options_ticker,
+                (uw_data or {}).get("error"),
+            )
+            return None
+
+        # Enrich with Hebrew analysis + flip + display ticker.
+        spot = float(uw_data.get("spot_price") or 0)
+        call_wall = uw_data.get("call_wall")
+        put_wall = uw_data.get("put_wall")
+        gamma_flip = uw_data.get("gamma_flip")
+        if gamma_flip is None and spot:
+            gamma_flip = round(spot * 0.998, 0)
+
+        uw_data["ticker"] = original_ticker
+        uw_data["options_ticker"] = options_ticker
+        uw_data["gamma_flip"] = gamma_flip
+        uw_data.setdefault(
+            "gex_profile", "wall" if (call_wall or put_wall) else "unknown"
+        )
+        uw_data["analysis_hebrew"] = self._generate_analysis_hebrew(
+            ticker=original_ticker,
+            spot=spot,
+            call_wall=call_wall,
+            put_wall=put_wall,
+            gamma_flip=gamma_flip,
+            regime=uw_data.get("regime") or "positive",
+            gex_profile=uw_data.get("gex_profile", "wall"),
+            cw_dist=uw_data.get("call_wall_distance_pct"),
+            pw_dist=uw_data.get("put_wall_distance_pct"),
+        )
+        logger.info("✅ UW GEX data for %s", original_ticker)
+        return uw_data
 
     # ───────────────────────── estimated fallback ─────────────────────────
 

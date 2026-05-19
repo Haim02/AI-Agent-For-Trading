@@ -24,3 +24,4 @@ finnhub-python
 websockets
 aiohttp
 pytz
+playwright>=1.40.0

@@ -43,6 +43,31 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("GEX Knowledge load failed: %s", exc)
 
+    # Unusual Whales credentials check — best-effort, doesn't block startup.
+    uw_email = os.getenv("UW_EMAIL", "")
+    uw_pass = os.getenv("UW_PASSWORD", "")
+    if uw_email and uw_pass:
+        logger.info("✅ UW credentials found: %s", uw_email)
+
+        async def _uw_warmup() -> None:
+            try:
+                from scrapers.uw_scraper import UnusualWhalesScraper
+                scraper = UnusualWhalesScraper()
+                try:
+                    if await scraper._ensure_logged_in():
+                        logger.info("✅ UW login successful on startup!")
+                        await scraper._async_save_session()
+                    else:
+                        logger.warning("⚠️ UW login failed on startup")
+                finally:
+                    await scraper.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("UW startup check: %s", exc)
+
+        asyncio.create_task(_uw_warmup())
+    else:
+        logger.warning("⚠️ UW_EMAIL/UW_PASSWORD not in .env")
+
     try:
         await get_autonomous_agent().warm_up()
         logger.info("🤖 סוכן אוטונומי מוכן לפעולה")
