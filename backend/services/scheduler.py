@@ -414,6 +414,82 @@ async def job_weekly_report() -> None:
         logger.exception("weekly_report failed")
 
 
+async def job_morning_narrative() -> None:
+    """14:30 Israel – send FlashAlpha 7-section narrative for SPY + QQQ."""
+    try:
+        from tools.flashalpha_tool import FlashAlphaTool
+    except ImportError:
+        logger.warning("morning_narrative: FlashAlphaTool unavailable")
+        return
+
+    fa = FlashAlphaTool()
+    tg = _telegram_service()
+    for ticker in ("SPY", "QQQ"):
+        try:
+            result = await fa.get_narrative_hebrew(ticker)
+        except Exception:  # noqa: BLE001
+            logger.exception("morning_narrative: %s failed", ticker)
+            continue
+        if "error" in result:
+            logger.warning(
+                "morning_narrative: %s skipped (%s)", ticker, result.get("error")
+            )
+            continue
+        if tg is None:
+            continue
+        try:
+            await tg.send_alert(
+                title=f"🧠 ניתוח AI – {ticker}",
+                body=result.get("formatted_message") or "—",
+                urgency="medium",
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("morning_narrative: telegram failed for %s", ticker)
+
+
+async def job_whale_signals() -> None:
+    """Every 30 min during US session – ping only score 85+ whale/golden trades."""
+    try:
+        from tools.flashalpha_tool import FlashAlphaTool
+    except ImportError:
+        return
+
+    fa = FlashAlphaTool()
+    tg = _telegram_service()
+    if tg is None:
+        return
+
+    intent_he = {"bullish": "🟢 שורי", "bearish": "🔴 דובי", "neutral": "🟡"}
+    for ticker in ("SPY", "QQQ", "NVDA", "TSLA"):
+        try:
+            data = await fa.get_flow_signals(
+                symbol=ticker, min_score=85, window_minutes=30, limit=3
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("whale_signals: %s fetch failed", ticker)
+            continue
+        if not data or "error" in data:
+            continue
+        signals = data.get("signals") or []
+        for sig in signals[:2]:
+            tags = sig.get("tags") or []
+            if "whale" not in tags and "golden" not in tags:
+                continue
+            right = "Call" if sig.get("right") == "C" else "Put"
+            intent_str = intent_he.get(sig.get("intent"), "🟡")
+            body = (
+                f"🐋 לוויתן! {ticker}\n\n"
+                f"{intent_str} {right} ${sig.get('strike', 0):,.0f}\n"
+                f"פקיעה: {sig.get('expiry', '?')} ({sig.get('dte', 0)}d)\n"
+                f"פרמיה: ${sig.get('premium', 0):,.0f}\n"
+                f"ניקוד: {sig.get('score', 0)}/100"
+            )
+            try:
+                await tg.send_alert(title=f"🐋 {ticker}", body=body, urgency="high")
+            except Exception:  # noqa: BLE001
+                logger.exception("whale_signals: telegram failed for %s", ticker)
+
+
 async def job_momentum_scan() -> None:
     """15:00 Israel – FinViz momentum scan + top-5 Telegram digest."""
     try:
@@ -749,6 +825,24 @@ def start_scheduler() -> AsyncIOScheduler:
         job_momentum_scan,
         CronTrigger(day_of_week="mon-fri", hour=12, minute=0, timezone=UTC),
         id="momentum_scan",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Morning narrative – 14:30 Israel = 11:30 UTC.
+    _scheduler.add_job(
+        job_morning_narrative,
+        CronTrigger(day_of_week="mon-fri", hour=11, minute=30, timezone=UTC),
+        id="morning_narrative",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Whale-signal sweeps every 30 min during US session (14:00–21:30 UTC ≈ 17–24 IL).
+    _scheduler.add_job(
+        job_whale_signals,
+        CronTrigger(day_of_week="mon-fri", hour="14-21", minute="*/30", timezone=UTC),
+        id="whale_signals",
         replace_existing=True,
         max_instances=1,
     )

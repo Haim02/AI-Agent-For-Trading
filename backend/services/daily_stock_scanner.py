@@ -613,24 +613,36 @@ class DailyStockScanner:
         )
 
     async def scan_momentum_stocks(self, limit: int = 20) -> dict[str, Any]:
-        """Scrape FinViz momentum screener, enrich each row with chart URL + news bullets."""
+        """Scrape FinViz momentum screener, enrich each row with chart URL + news bullets.
+
+        Designed to ALWAYS return data: FinViz HTML → FinViz export → curated +
+        yfinance live prices. News enrichment is best-effort and time-boxed so a
+        slow Perplexity call can't break the whole scan.
+        """
         from utils.time_helper import now_israel
 
         logger.info("🔍 Scanning momentum stocks...")
 
-        tickers_data = await self._scrape_screener_table()
+        try:
+            tickers_data = await self._scrape_screener_table()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Scrape error: %s", exc)
+            tickers_data = []
+
         if not tickers_data:
-            logger.warning("FinViz scrape empty, using fallback")
-            tickers_data = self._fallback_momentum_tickers()
+            tickers_data = await self._curated_with_live_data()
 
         results: list[dict[str, Any]] = []
         for stock in tickers_data[:limit]:
             ticker = stock["ticker"]
             try:
-                news = await self._get_news_reason(ticker)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Enrich %s failed: %s", ticker, exc)
+                news = await asyncio.wait_for(
+                    self._get_news_reason(ticker), timeout=10
+                )
+            except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
+                logger.warning("News %s skipped: %s", ticker, exc)
                 news = []
+
             results.append(
                 {
                     "ticker": ticker,
@@ -655,16 +667,32 @@ class DailyStockScanner:
         }
 
         try:
-            await self.db.scanner_results.insert_one(
-                {**scan_result, "created_at": datetime.utcnow()}
-            )
+            if self.db is not None:
+                await self.db.scanner_results.insert_one(
+                    {**scan_result, "created_at": datetime.utcnow()}
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Save scan failed: %s", exc)
 
         return scan_result
 
     async def _scrape_screener_table(self) -> list[dict[str, Any]]:
-        """Light httpx + BeautifulSoup parse of the FinViz screener HTML."""
+        """3-strategy scrape: FinViz HTML → FinViz export → curated+yfinance."""
+        stocks = await self._try_finviz_html()
+        if stocks and len(stocks) >= 5:
+            logger.info("✅ FinViz HTML: %d stocks", len(stocks))
+            return stocks
+
+        stocks = await self._try_finviz_export()
+        if stocks and len(stocks) >= 5:
+            logger.info("✅ FinViz export: %d stocks", len(stocks))
+            return stocks
+
+        logger.warning("FinViz failed, using curated + yfinance")
+        return await self._curated_with_live_data()
+
+    async def _try_finviz_html(self) -> list[dict[str, Any]]:
+        """Browser-like HTML fetch with column-shape autodetect."""
         try:
             import httpx
             from bs4 import BeautifulSoup
@@ -674,58 +702,168 @@ class DailyStockScanner:
 
         headers = {
             "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/120.0.0.0 Safari/537.36"
-            )
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Cache-Control": "max-age=0",
         }
 
         stocks: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            # FinViz paginates 20-per-page via &r=offset.
-            for page_offset in (1, 21):
-                url = f"{self.SCREENER_URL}&r={page_offset}"
+
+        async with httpx.AsyncClient(
+            timeout=20.0, follow_redirects=True, headers=headers
+        ) as client:
+            for page_offset in (1, 21, 41):
                 try:
-                    resp = await client.get(url, headers=headers)
+                    resp = await client.get(f"{self.SCREENER_URL}&r={page_offset}")
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("FinViz GET failed: %s", exc)
+                    logger.warning("FinViz GET %s failed: %s", page_offset, exc)
                     continue
                 if resp.status_code != 200:
-                    logger.warning("FinViz %s for %s", resp.status_code, url)
+                    logger.warning("FinViz %s on page %s", resp.status_code, page_offset)
                     continue
 
                 soup = BeautifulSoup(resp.text, "html.parser")
-                rows = soup.select(
-                    "tr[class*='styled-row'], "
-                    "tr.table-dark-row-cp, "
-                    "tr.table-light-row-cp"
+                rows = (
+                    soup.select("tr[class*='styled-row']")
+                    or soup.select("tr.table-dark-row-cp")
+                    or soup.select("tr.table-light-row-cp")
+                    or soup.select("tr[valign='top']")
                 )
+                if not rows:
+                    # Last resort: scan every table for one with >5 rows.
+                    for tbl in soup.find_all("table"):
+                        tbl_rows = tbl.find_all("tr")
+                        if len(tbl_rows) > 5:
+                            rows = tbl_rows[1:]
+                            break
 
                 for row in rows:
                     cells = row.find_all("td")
-                    if len(cells) < 10:
+                    if len(cells) < 8:
                         continue
                     try:
-                        ticker = cells[1].get_text(strip=True)
-                        if not ticker or len(ticker) > 6:
+                        # Find ticker by looking for an uppercase 2-5-letter <a> link.
+                        ticker = None
+                        for cell in cells[:4]:
+                            link = cell.find("a")
+                            if link:
+                                txt = link.get_text(strip=True)
+                                if txt and txt.isupper() and 1 < len(txt) <= 5:
+                                    ticker = txt
+                                    break
+                        if not ticker:
                             continue
-                        company = cells[2].get_text(strip=True)
-                        sector = cells[3].get_text(strip=True)
-                        price_txt = cells[8].get_text(strip=True)
-                        change_txt = cells[9].get_text(strip=True).replace("%", "")
+
+                        # Auto-detect price (decimal number) and change_pct (% suffix).
+                        price = 0.0
+                        change_pct = 0.0
+                        for cell in cells:
+                            txt = cell.get_text(strip=True)
+                            cleaned = txt.replace(",", "").replace("+", "")
+                            if "%" in txt:
+                                try:
+                                    change_pct = float(cleaned.replace("%", ""))
+                                except ValueError:
+                                    pass
+                            elif price == 0 and "." in cleaned:
+                                stripped = cleaned.lstrip("-")
+                                if stripped.replace(".", "").isdigit():
+                                    try:
+                                        price = float(cleaned)
+                                    except ValueError:
+                                        pass
+
+                        company = cells[2].get_text(strip=True)[:50] if len(cells) > 2 else ""
+
                         stocks.append(
                             {
                                 "ticker": ticker,
                                 "company": company,
-                                "sector": sector,
-                                "price": self._safe_float(price_txt),
-                                "change_pct": self._safe_float(change_txt),
+                                "sector": "",
+                                "price": price,
+                                "change_pct": change_pct,
                             }
                         )
                     except Exception:  # noqa: BLE001
                         continue
 
-        logger.info("FinViz scraped %d stocks", len(stocks))
+                if not stocks:
+                    break
+                await asyncio.sleep(0.5)
+
+        # Dedupe by ticker
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for s in stocks:
+            t = s["ticker"]
+            if t not in seen:
+                seen.add(t)
+                unique.append(s)
+        return unique
+
+    async def _try_finviz_export(self) -> list[dict[str, Any]]:
+        """FinViz CSV export is Elite-only; left as a no-op placeholder."""
+        return []
+
+    async def _curated_with_live_data(self) -> list[dict[str, Any]]:
+        """Curated momentum names enriched with live yfinance prices. Always returns data."""
+        try:
+            import yfinance as yf
+        except ImportError:
+            logger.warning("yfinance unavailable – returning bare fallback")
+            return self._fallback_momentum_tickers()
+
+        CURATED = [
+            "NVDA", "TSLA", "AMD", "PLTR", "SMCI",
+            "MARA", "COIN", "MSTR", "AVGO", "META",
+            "MU", "ARM", "SOFI", "RIVN", "LCID",
+            "AAPL", "MSFT", "GOOGL", "AMZN", "NFLX",
+        ]
+
+        def _fetch(symbol: str) -> Optional[dict[str, Any]]:
+            try:
+                t = yf.Ticker(symbol)
+                hist = t.history(period="5d")
+                if hist.empty or len(hist) < 2:
+                    return None
+                last = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2])
+                change_pct = ((last - prev) / prev * 100) if prev else 0.0
+                info = t.info or {}
+                return {
+                    "ticker": symbol,
+                    "company": (info.get("shortName") or "")[:50],
+                    "sector": info.get("sector") or "",
+                    "price": round(last, 2),
+                    "change_pct": round(change_pct, 2),
+                }
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("yfinance %s: %s", symbol, exc)
+                return None
+
+        results = await asyncio.gather(
+            *(asyncio.to_thread(_fetch, s) for s in CURATED),
+            return_exceptions=True,
+        )
+
+        stocks: list[dict[str, Any]] = []
+        for r in results:
+            if r and not isinstance(r, Exception):
+                stocks.append(r)  # type: ignore[arg-type]
+
+        stocks.sort(key=lambda x: x.get("change_pct", 0) or 0, reverse=True)
+        logger.info("✅ Curated fallback: %d stocks", len(stocks))
         return stocks
 
     @staticmethod

@@ -35,6 +35,9 @@ HELP_TEXT = (
     "/positions — פוזיציות פתוחות\n"
     "/gex — GEX נוכחי מ-MenthorQ\n"
     "/levels [TICKER] — רמות GEX מ-FlashAlpha\n"
+    "/narrative [TICKER] — ניתוח AI מלא לנכס\n"
+    "/signals [TICKER] [SCORE] — סיגנלי Flow חזקים\n"
+    "/whales [TICKER] — עסקות ענק (ניקוד 85+)\n"
     "/summary — סיכום יומי\n"
     "/learn טקסט — שמור העדפה חדשה\n"
     "/help — תפריט עזרה\n\n"
@@ -201,6 +204,114 @@ async def cmd_summary(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _send(update, "\n".join(lines))
 
 
+async def _send_long(update: Update, text: str) -> None:
+    """Reply with auto-split chunks so we don't hit Telegram's 4096-char cap."""
+    cleaned = clean_response(text)
+    chunk = 3800  # Leave headroom for formatting bytes / unicode escaping
+    if len(cleaned) <= chunk:
+        await update.effective_message.reply_text(
+            cleaned, disable_web_page_preview=True
+        )
+        return
+    for i in range(0, len(cleaned), chunk):
+        await update.effective_message.reply_text(
+            cleaned[i : i + chunk], disable_web_page_preview=True
+        )
+
+
+async def cmd_narrative(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """``/narrative [TICKER]`` – FlashAlpha 7-section Hebrew briefing."""
+    ticker = (ctx.args[0].upper() if ctx.args else "SPY")
+    await _send(
+        update,
+        f"מייצר ניתוח AI מלא ל-{ticker}... ⏳\n(זה לוקח כ-15 שניות)",
+        parse=False,
+    )
+
+    from tools.flashalpha_tool import FlashAlphaTool
+    try:
+        result = await FlashAlphaTool().get_narrative_hebrew(ticker)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("cmd_narrative failed")
+        await _send(update, f"⚠️ שגיאה: {exc}", parse=False)
+        return
+
+    if "error" in result:
+        if result["error"] == "plan_required":
+            await _send(
+                update,
+                "⚠️ Narrative דורש תוכנית Growth+ ב-FlashAlpha",
+                parse=False,
+            )
+        else:
+            await _send(
+                update,
+                result.get("message") or f"שגיאה: {result['error']}",
+                parse=False,
+            )
+        return
+    await _send_long(update, result.get("formatted_message") or "—")
+
+
+async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """``/signals [TICKER] [MIN_SCORE]`` – top Hebrew-formatted FlashAlpha signals."""
+    args = ctx.args or []
+    ticker = args[0].upper() if args else "SPY"
+    try:
+        min_score = int(args[1]) if len(args) > 1 else 70
+    except ValueError:
+        min_score = 70
+
+    await _send(update, f"סורק סיגנלים ל-{ticker}... ⏳", parse=False)
+
+    from tools.flashalpha_tool import FlashAlphaTool
+    try:
+        result = await FlashAlphaTool().get_top_signals_hebrew(
+            ticker, min_score=min_score
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("cmd_signals failed")
+        await _send(update, f"⚠️ שגיאה: {exc}", parse=False)
+        return
+
+    if "error" in result:
+        if result["error"] == "plan_required":
+            await _send(
+                update,
+                "⚠️ Flow Signals דורש תוכנית Alpha ב-FlashAlpha",
+                parse=False,
+            )
+        else:
+            await _send(
+                update,
+                result.get("message") or f"שגיאה: {result['error']}",
+                parse=False,
+            )
+        return
+    await _send_long(update, result.get("formatted_message") or "—")
+
+
+async def cmd_whales(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """``/whales [TICKER]`` – only score-85+ trades."""
+    ticker = (ctx.args[0].upper() if ctx.args else "SPY")
+    await _send(update, f"מחפש לוויתנים ב-{ticker}... 🐋", parse=False)
+
+    from tools.flashalpha_tool import FlashAlphaTool
+    try:
+        result = await FlashAlphaTool().get_top_signals_hebrew(
+            ticker, min_score=85
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("cmd_whales failed")
+        await _send(update, f"⚠️ שגיאה: {exc}", parse=False)
+        return
+
+    if "error" in result:
+        await _send(update, "לא נמצאו לוויתנים כרגע.", parse=False)
+        return
+    await _send_long(update, result.get("formatted_message") or "—")
+
+
 async def cmd_levels(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """``/levels [TICKER]`` – Hebrew GEX-levels card from FlashAlpha."""
     ticker = (ctx.args[0].upper() if ctx.args else "SPY")
@@ -319,6 +430,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("gex", cmd_gex))
     app.add_handler(CommandHandler("summary", cmd_summary))
     app.add_handler(CommandHandler("levels", cmd_levels))
+    app.add_handler(CommandHandler("narrative", cmd_narrative))
+    app.add_handler(CommandHandler("signals", cmd_signals))
+    app.add_handler(CommandHandler("whales", cmd_whales))
     app.add_handler(CommandHandler("learn", cmd_learn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     return app
