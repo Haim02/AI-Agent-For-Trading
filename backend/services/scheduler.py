@@ -414,6 +414,38 @@ async def job_weekly_report() -> None:
         logger.exception("weekly_report failed")
 
 
+async def job_momentum_scan() -> None:
+    """15:00 Israel – FinViz momentum scan + top-5 Telegram digest."""
+    try:
+        scanner = _get_daily_stock_scanner()
+        result = await scanner.scan_momentum_stocks(limit=15)
+    except Exception:  # noqa: BLE001
+        logger.exception("momentum_scan: scan failed")
+        return
+
+    tg = _telegram_service()
+    if tg is None:
+        return
+
+    top5 = (result.get("stocks") or [])[:5]
+    if not top5:
+        return
+    lines = ["🔍 סריקת מניות יומית", ""]
+    for s in top5:
+        change = s.get("change_pct") or 0
+        lines.append(f"📈 {s.get('ticker', '?')} +{change:.1f}%")
+        news = s.get("news") or []
+        if news:
+            lines.append(f"   {str(news[0])[:80]}")
+        lines.append("")
+    try:
+        await tg.send_alert(
+            title="🔍 סריקת מניות", body="\n".join(lines), urgency="low"
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("momentum_scan: telegram failed")
+
+
 async def job_daily_gex_report() -> None:
     """14:00 Israel – send GEX+Flow report for SPY/QQQ/SPX."""
     analyzer = _get_market_analyzer()
@@ -708,6 +740,15 @@ def start_scheduler() -> AsyncIOScheduler:
         job_weekly_report,
         CronTrigger(day_of_week="sun", hour=5, minute=0, timezone=UTC),
         id="weekly_report",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Momentum scan – 15:00 Israel = 12:00 UTC, weekdays.
+    _scheduler.add_job(
+        job_momentum_scan,
+        CronTrigger(day_of_week="mon-fri", hour=12, minute=0, timezone=UTC),
+        id="momentum_scan",
         replace_existing=True,
         max_instances=1,
     )

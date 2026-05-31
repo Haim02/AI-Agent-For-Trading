@@ -34,6 +34,7 @@ HELP_TEXT = (
     "/scan — סריקת שוק אוטונומית\n"
     "/positions — פוזיציות פתוחות\n"
     "/gex — GEX נוכחי מ-MenthorQ\n"
+    "/levels [TICKER] — רמות GEX מ-FlashAlpha\n"
     "/summary — סיכום יומי\n"
     "/learn טקסט — שמור העדפה חדשה\n"
     "/help — תפריט עזרה\n\n"
@@ -200,6 +201,25 @@ async def cmd_summary(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _send(update, "\n".join(lines))
 
 
+async def cmd_levels(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """``/levels [TICKER]`` – Hebrew GEX-levels card from FlashAlpha."""
+    ticker = (ctx.args[0].upper() if ctx.args else "SPY")
+    await _send(update, f"מנתח רמות {ticker}... ⏳", parse=False)
+
+    from tools.flashalpha_tool import FlashAlphaTool
+    try:
+        result = await FlashAlphaTool().get_full_analysis(ticker)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("cmd_levels: FlashAlpha failed")
+        await _send(update, f"⚠️ שגיאה: {exc}", parse=False)
+        return
+
+    if "error" in result:
+        await _send(update, result.get("message") or "שגיאה", parse=False)
+        return
+    await _send(update, result.get("analysis_hebrew") or "—", parse=False)
+
+
 async def cmd_learn(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     raw = " ".join(ctx.args or []).strip()
     if not raw:
@@ -298,6 +318,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("positions", cmd_positions))
     app.add_handler(CommandHandler("gex", cmd_gex))
     app.add_handler(CommandHandler("summary", cmd_summary))
+    app.add_handler(CommandHandler("levels", cmd_levels))
     app.add_handler(CommandHandler("learn", cmd_learn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     return app

@@ -573,22 +573,43 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
         call_wall: Optional[float] = None
         put_wall: Optional[float] = None
         gamma_flip: Optional[float] = None
+        zero_dte_magnet: Optional[float] = None
+        highest_oi_strike: Optional[float] = None
         top_strikes: list[dict[str, Any]] = []
         regime = "positive"
 
-        try:
-            from analytics.gex_engine import GEXEngine
+        # PRIMARY: FlashAlpha (supports SPX natively).
+        if os.getenv("FLASHALPHA_API_KEY"):
+            try:
+                from tools.flashalpha_tool import FlashAlphaTool
 
-            spy_ticker = "SPY" if ticker.upper() == "SPX" else ticker.upper()
-            gex_data = await GEXEngine().get_full_gex_analysis(spy_ticker)
-            if "error" not in gex_data:
-                call_wall = gex_data.get("call_wall")
-                put_wall = gex_data.get("put_wall")
-                gamma_flip = gex_data.get("gamma_flip")
-                top_strikes = gex_data.get("top_strikes") or []
-                regime = gex_data.get("regime") or "positive"
-        except Exception:  # noqa: BLE001
-            logger.exception("gex_levels_chart: GEXEngine failed – falling back to synthetic")
+                fa_data = await FlashAlphaTool().get_full_analysis(ticker.upper())
+                if fa_data and "error" not in fa_data:
+                    call_wall = fa_data.get("call_wall")
+                    put_wall = fa_data.get("put_wall")
+                    gamma_flip = fa_data.get("gamma_flip")
+                    zero_dte_magnet = fa_data.get("zero_dte_magnet")
+                    highest_oi_strike = fa_data.get("highest_oi_strike")
+                    top_strikes = fa_data.get("top_strikes") or []
+                    regime = fa_data.get("regime") or "positive"
+            except Exception:  # noqa: BLE001
+                logger.exception("gex_levels_chart: FlashAlpha failed – trying GEXEngine")
+
+        # FALLBACK: GEXEngine (UW → Massive → yfinance → estimated).
+        if call_wall is None and put_wall is None:
+            try:
+                from analytics.gex_engine import GEXEngine
+
+                spy_ticker = "SPY" if ticker.upper() == "SPX" else ticker.upper()
+                gex_data = await GEXEngine().get_full_gex_analysis(spy_ticker)
+                if "error" not in gex_data:
+                    call_wall = gex_data.get("call_wall")
+                    put_wall = gex_data.get("put_wall")
+                    gamma_flip = gex_data.get("gamma_flip")
+                    top_strikes = gex_data.get("top_strikes") or []
+                    regime = gex_data.get("regime") or "positive"
+            except Exception:  # noqa: BLE001
+                logger.exception("gex_levels_chart: GEXEngine failed – falling back to synthetic")
 
         # Synthetic fallback so the chart always renders something useful.
         if call_wall is None:
@@ -650,6 +671,34 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
                 "description": "רצפה מבנית – Dealers קונים",
             },
         ]
+
+        # FlashAlpha-only levels: 0DTE magnet + highest-OI strike.
+        if zero_dte_magnet:
+            levels.append(
+                {
+                    "id": "zero_dte_magnet",
+                    "label": f"0DTE Magnet {int(zero_dte_magnet)}",
+                    "price": zero_dte_magnet,
+                    "color": "#a855f7",
+                    "style": "dashed",
+                    "width": 2,
+                    "side": "magnet",
+                    "description": "מגנט 0DTE – ריכוז פקיעות יומיות",
+                }
+            )
+        if highest_oi_strike:
+            levels.append(
+                {
+                    "id": "highest_oi",
+                    "label": f"Max OI {int(highest_oi_strike)}",
+                    "price": highest_oi_strike,
+                    "color": "#06b6d4",
+                    "style": "solid",
+                    "width": 1,
+                    "side": "oi",
+                    "description": "Strike עם הכי הרבה Open Interest",
+                }
+            )
 
         ut_count = 1
         dt_count = 1
@@ -1049,6 +1098,66 @@ async def get_uw_flow(ticker: Optional[str] = Query(default=None)) -> dict[str, 
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         await scraper.close()
+
+
+# ───────────────────────── FlashAlpha Lab ─────────────────────────
+
+@router.get("/flashalpha/levels/{ticker}")
+async def fa_levels(ticker: str) -> Optional[dict[str, Any]]:
+    """Key levels (gamma flip, walls, OI, 0DTE magnet) from FlashAlpha."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    return await FlashAlphaTool().get_levels(ticker.upper().strip())
+
+
+@router.get("/flashalpha/gex/{ticker}")
+async def fa_gex(
+    ticker: str, expiration: Optional[str] = Query(default=None)
+) -> Optional[dict[str, Any]]:
+    """Full GEX by strike from FlashAlpha. ``expiration`` filter for non-Growth plans."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    return await FlashAlphaTool().get_gex(ticker.upper().strip(), expiration)
+
+
+@router.get("/flashalpha/zerodte/{ticker}")
+async def fa_zerodte(ticker: str) -> Optional[dict[str, Any]]:
+    """0DTE-specific exposure data from FlashAlpha."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    return await FlashAlphaTool().get_zero_dte(ticker.upper().strip())
+
+
+@router.get("/flashalpha/analysis/{ticker}")
+async def fa_analysis(ticker: str) -> dict[str, Any]:
+    """Combined Hebrew GEX analysis (levels + GEX + regime) from FlashAlpha."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    return await FlashAlphaTool().get_full_analysis(ticker.upper().strip())
+
+
+@router.get("/scanner/momentum")
+async def scan_momentum(limit: int = 20) -> dict[str, Any]:
+    """Live FinViz momentum scan with chart URLs + Perplexity news reasons."""
+    try:
+        from services.daily_stock_scanner import DailyStockScanner
+
+        scanner = DailyStockScanner()
+        return await scanner.scan_momentum_stocks(limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("scanner/momentum failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/scanner/latest")
+async def get_latest_scan() -> dict[str, Any]:
+    """Return the most recently persisted momentum scan (cheap, no scraping)."""
+    try:
+        db = get_db()
+        latest = await db.scanner_results.find_one(sort=[("created_at", -1)])
+        if not latest:
+            return {"stocks": [], "count": 0}
+        latest["_id"] = str(latest["_id"])
+        return latest
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("scanner/latest failed")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/uw/market-tide")

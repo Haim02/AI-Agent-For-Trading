@@ -43,6 +43,14 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("GEX Knowledge load failed: %s", exc)
 
+    # FlashAlpha primary GEX source.
+    if os.getenv("FLASHALPHA_API_KEY"):
+        logger.info("✅ FlashAlpha API key found – will be used as primary GEX source")
+    else:
+        logger.warning(
+            "⚠️ FLASHALPHA_API_KEY not set – using fallback GEX sources (UW/Massive/yfinance)"
+        )
+
     # Unusual Whales credentials check — best-effort, doesn't block startup.
     uw_email = os.getenv("UW_EMAIL", "")
     uw_pass = os.getenv("UW_PASSWORD", "")

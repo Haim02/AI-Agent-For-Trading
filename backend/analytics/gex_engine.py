@@ -62,7 +62,14 @@ class GEXEngine:
         )
 
         try:
-            # Primary source: Unusual Whales (logged-in scraper) when configured.
+            # Primary source: FlashAlpha Lab API – clean structured JSON,
+            # supports SPX/NDX/RUT natively (no ETF substitution needed).
+            if os.getenv("FLASHALPHA_API_KEY"):
+                fa_result = await self._try_flashalpha_gex(original_ticker)
+                if fa_result is not None:
+                    return fa_result
+
+            # Secondary: Unusual Whales (logged-in scraper) when configured.
             if os.getenv("UW_EMAIL"):
                 uw_result = await self._try_uw_gex(original_ticker, options_ticker)
                 if uw_result is not None:
@@ -171,6 +178,33 @@ class GEXEngine:
                 "ticker": original_ticker,
                 "spot_price": 0,
             }
+
+    # ───────────────────────── FlashAlpha primary source ─────────────────────────
+
+    async def _try_flashalpha_gex(self, original_ticker: str) -> Optional[dict]:
+        """FlashAlpha returns analysis directly in the engine's response shape."""
+        try:
+            from tools.flashalpha_tool import FlashAlphaTool
+        except ImportError as exc:
+            logger.warning("FlashAlpha tool unavailable: %s", exc)
+            return None
+
+        try:
+            result = await FlashAlphaTool().get_full_analysis(original_ticker)
+        except Exception:  # noqa: BLE001
+            logger.exception("FlashAlpha get_full_analysis raised")
+            return None
+
+        if not result or "error" in result:
+            logger.warning(
+                "FlashAlpha returned error for %s (%s) – falling through",
+                original_ticker,
+                (result or {}).get("error"),
+            )
+            return None
+
+        logger.info("✅ FlashAlpha GEX: %s", original_ticker)
+        return result
 
     # ───────────────────────── UW primary source ─────────────────────────
 

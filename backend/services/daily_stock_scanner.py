@@ -26,8 +26,8 @@ class DailyStockScanner:
     """Daily comprehensive stock analysis system. Learns from past predictions."""
 
     SCREENER_URL = (
-        "https://finviz.com/screener.ashx"
-        "?v=111&f=cap_midover,sh_avgvol_o500,sh_opt_option,"
+        "https://finviz.com/screener?v=111&"
+        "f=cap_midover,sh_avgvol_o500,sh_opt_option,"
         "sh_relvol_o1,ta_highlow52w_a70h&ft=4&o=-volume"
     )
 
@@ -601,6 +601,184 @@ class DailyStockScanner:
             return 0
         logger.info("🧹 נמחקו %s ניתוחים ישנים", result.deleted_count)
         return result.deleted_count
+
+    # ───────────────────────── momentum scanner (UI) ─────────────────────────
+
+    @staticmethod
+    def _chart_url(ticker: str) -> str:
+        """FinViz ready-made daily-candle chart image (no chart engine needed)."""
+        return (
+            f"https://charts.finviz.com/chart.ashx?"
+            f"t={ticker}&ty=c&ta=1&p=d&s=l"
+        )
+
+    async def scan_momentum_stocks(self, limit: int = 20) -> dict[str, Any]:
+        """Scrape FinViz momentum screener, enrich each row with chart URL + news bullets."""
+        from utils.time_helper import now_israel
+
+        logger.info("🔍 Scanning momentum stocks...")
+
+        tickers_data = await self._scrape_screener_table()
+        if not tickers_data:
+            logger.warning("FinViz scrape empty, using fallback")
+            tickers_data = self._fallback_momentum_tickers()
+
+        results: list[dict[str, Any]] = []
+        for stock in tickers_data[:limit]:
+            ticker = stock["ticker"]
+            try:
+                news = await self._get_news_reason(ticker)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Enrich %s failed: %s", ticker, exc)
+                news = []
+            results.append(
+                {
+                    "ticker": ticker,
+                    "company": stock.get("company", ""),
+                    "sector": stock.get("sector", ""),
+                    "price": stock.get("price", 0),
+                    "change_pct": stock.get("change_pct", 0),
+                    "volume": stock.get("volume", ""),
+                    "rel_volume": stock.get("rel_volume", 0),
+                    "chart_url": self._chart_url(ticker),
+                    "news": news,
+                    "is_optionable": True,
+                }
+            )
+
+        scan_result = {
+            "count": len(results),
+            "stocks": results,
+            "screener_url": self.SCREENER_URL,
+            "timestamp": now_israel().strftime("%H:%M | %d/%m/%Y"),
+            "scan_type": "momentum_uptrend",
+        }
+
+        try:
+            await self.db.scanner_results.insert_one(
+                {**scan_result, "created_at": datetime.utcnow()}
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Save scan failed: %s", exc)
+
+        return scan_result
+
+    async def _scrape_screener_table(self) -> list[dict[str, Any]]:
+        """Light httpx + BeautifulSoup parse of the FinViz screener HTML."""
+        try:
+            import httpx
+            from bs4 import BeautifulSoup
+        except ImportError as exc:
+            logger.error("Missing scrape deps: %s", exc)
+            return []
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+
+        stocks: list[dict[str, Any]] = []
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            # FinViz paginates 20-per-page via &r=offset.
+            for page_offset in (1, 21):
+                url = f"{self.SCREENER_URL}&r={page_offset}"
+                try:
+                    resp = await client.get(url, headers=headers)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("FinViz GET failed: %s", exc)
+                    continue
+                if resp.status_code != 200:
+                    logger.warning("FinViz %s for %s", resp.status_code, url)
+                    continue
+
+                soup = BeautifulSoup(resp.text, "html.parser")
+                rows = soup.select(
+                    "tr[class*='styled-row'], "
+                    "tr.table-dark-row-cp, "
+                    "tr.table-light-row-cp"
+                )
+
+                for row in rows:
+                    cells = row.find_all("td")
+                    if len(cells) < 10:
+                        continue
+                    try:
+                        ticker = cells[1].get_text(strip=True)
+                        if not ticker or len(ticker) > 6:
+                            continue
+                        company = cells[2].get_text(strip=True)
+                        sector = cells[3].get_text(strip=True)
+                        price_txt = cells[8].get_text(strip=True)
+                        change_txt = cells[9].get_text(strip=True).replace("%", "")
+                        stocks.append(
+                            {
+                                "ticker": ticker,
+                                "company": company,
+                                "sector": sector,
+                                "price": self._safe_float(price_txt),
+                                "change_pct": self._safe_float(change_txt),
+                            }
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+
+        logger.info("FinViz scraped %d stocks", len(stocks))
+        return stocks
+
+    @staticmethod
+    def _safe_float(text: str) -> float:
+        if not text:
+            return 0.0
+        try:
+            return float(text.replace(",", ""))
+        except ValueError:
+            return 0.0
+
+    async def _get_news_reason(self, ticker: str) -> list[str]:
+        """Recent news (≤3 bullets, Hebrew) explaining the move — Perplexity-backed."""
+        if not self.perplexity:
+            return []
+        try:
+            result = await asyncio.to_thread(
+                self.perplexity.search,
+                f"Why is {ticker} stock moving today? Recent catalyst or news in "
+                f"the last 3 days. List up to 3 specific reasons briefly.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("News reason %s: %s", ticker, exc)
+            return []
+
+        answer = (result.get("answer", "") if isinstance(result, dict) else "") or ""
+        if not answer.strip():
+            return []
+
+        try:
+            from tools.translate import translate_to_hebrew
+            answer_he = await translate_to_hebrew(answer)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("translate failed for %s: %s", ticker, exc)
+            answer_he = answer
+
+        bullets = [
+            line.strip("•-* ").strip()
+            for line in answer_he.split("\n")
+            if line.strip() and len(line.strip()) > 10
+        ]
+        return bullets[:3]
+
+    def _fallback_momentum_tickers(self) -> list[dict[str, Any]]:
+        """Generic uptrending names when the FinViz scrape returns nothing."""
+        return [
+            {"ticker": t, "company": "", "sector": "", "price": 0, "change_pct": 0}
+            for t in [
+                "NVDA", "TSLA", "AMD", "PLTR", "SMCI",
+                "MARA", "COIN", "MSTR", "AVGO", "META",
+                "MU", "ARM",
+            ]
+        ]
 
 
 __all__ = ["DailyStockScanner"]
