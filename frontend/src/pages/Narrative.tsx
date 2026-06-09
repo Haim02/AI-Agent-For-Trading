@@ -41,17 +41,18 @@ const SECTIONS: Section[] = [
 
 export default function Narrative() {
   const [ticker, setTicker] = useState("SPY");
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["narrative", ticker],
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["narrative", ticker, refreshKey],
     queryFn: () => fetchNarrative(ticker),
-    refetchInterval: 5 * 60 * 1000,
-    retry: 1,
+    retry: 2,
+    retryDelay: 2000,
+    staleTime: 10 * 60 * 1000,
   });
 
   const sections = data?.sections_hebrew ?? {};
   const errKey = data?.error;
-  const isPlanReq = errKey === "plan_required";
 
   return (
     <div className="min-h-screen bg-gray-950 pb-24 text-white">
@@ -64,7 +65,7 @@ export default function Narrative() {
             </p>
           </div>
           <button
-            onClick={() => refetch()}
+            onClick={() => setRefreshKey((k) => k + 1)}
             className="rounded-xl bg-gray-800 p-2.5 text-lg"
             aria-label="רענן"
           >
@@ -101,19 +102,16 @@ export default function Narrative() {
         </div>
       )}
 
-      {isPlanReq && (
-        <div className="mx-4 rounded-2xl border border-yellow-700 bg-yellow-900/30 p-5 text-center">
-          <div className="mb-2 text-3xl">⚠️</div>
-          <div className="font-semibold text-yellow-300">דורש תוכנית Growth</div>
-          <div className="mt-2 text-sm text-yellow-400 opacity-80">
-            Narrative API זמין רק עם תוכנית Growth ומעלה ב-FlashAlpha
-          </div>
-        </div>
-      )}
-
-      {(isError || (errKey && !isPlanReq)) && (
-        <div className="mx-4 rounded-2xl border border-red-700 bg-red-900/30 p-5 text-center text-red-300">
-          ⚠️ {data?.message || "שגיאה בטעינה"}
+      {(isError || errKey) && (
+        <div className="mx-4 rounded-2xl border border-red-800 bg-red-900/20 p-5 text-center">
+          <div className="mb-2 text-2xl">⚠️</div>
+          <div className="mb-3 text-sm text-red-300">שגיאה בטעינה. נסה שנית.</div>
+          <button
+            onClick={() => setRefreshKey((k) => k + 1)}
+            className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white"
+          >
+            נסה שוב
+          </button>
         </div>
       )}
 

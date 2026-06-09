@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any, Optional
 
@@ -18,6 +19,31 @@ import httpx
 from utils.time_helper import ISRAEL_TZ
 
 logger = logging.getLogger(__name__)
+
+
+# ───────────────────────── module-level cache ─────────────────────────
+# FlashAlpha free tier is 5 calls/day, basic is 100/day. Without caching the
+# chart endpoint alone burns the quota in minutes. 1h TTL is long enough to
+# stay within budget and short enough that walls/flips refresh during a session.
+_CACHE: dict[str, tuple[Any, float]] = {}
+_CACHE_TTL = 3600  # seconds
+
+
+def _cache_get(key: str) -> Optional[dict]:
+    entry = _CACHE.get(key)
+    if entry is None:
+        return None
+    data, ts = entry
+    if time.time() - ts < _CACHE_TTL:
+        logger.info("Cache HIT: %s", key)
+        return data
+    del _CACHE[key]
+    return None
+
+
+def _cache_set(key: str, data: dict) -> None:
+    _CACHE[key] = (data, time.time())
+    logger.info("Cache SET: %s", key)
 
 
 class FlashAlphaTool:
@@ -36,15 +62,23 @@ class FlashAlphaTool:
         if not self.api_key:
             logger.warning("FLASHALPHA_API_KEY not set")
             return None
+
+        cache_key = f"{endpoint}_{str(params or {})}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.get(
                     f"{self.BASE_URL}{endpoint}",
                     headers=self.headers,
                     params=params or {},
                 )
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                _cache_set(cache_key, data)
+                return data
             if resp.status_code == 403:
                 logger.warning(
                     "FlashAlpha 403: plan upgrade needed for %s", endpoint

@@ -43,6 +43,7 @@ interface SignalsResponse {
   signals?: Signal[];
   chain?: Chain;
   error?: string;
+  source?: string;
 }
 
 async function fetchSignals(
@@ -195,7 +196,7 @@ export default function Signals() {
   const signals: Signal[] = data?.signals ?? [];
   const chain: Chain = data?.chain ?? {};
   const errKey = data?.error;
-  const isPlanReq = errKey === "plan_required";
+  const isError = !!errKey;
 
   return (
     <div className="min-h-screen bg-gray-950 pb-24 text-white">
@@ -290,13 +291,10 @@ export default function Signals() {
         <div className="py-12 text-center text-gray-500">סורק...</div>
       )}
 
-      {isPlanReq && (
-        <div className="mx-4 rounded-2xl border border-yellow-700 bg-yellow-900/30 p-5 text-center">
-          <div className="mb-2 text-3xl">⚠️</div>
-          <div className="font-semibold text-yellow-300">דורש תוכנית Alpha</div>
-          <div className="mt-2 text-sm text-yellow-400 opacity-80">
-            Flow Signals דורש Alpha ב-FlashAlpha
-          </div>
+      {isError && (
+        <div className="mx-4 rounded-2xl border border-gray-700 bg-gray-900 p-5 text-center">
+          <div className="mb-2 text-2xl">⚠️</div>
+          <div className="text-sm text-gray-400">שגיאה בטעינה. נסה שנית.</div>
         </div>
       )}
 
@@ -317,6 +315,15 @@ export default function Signals() {
       {!isLoading && signals.length > 0 && (
         <div className="py-4 text-center text-xs text-gray-600">
           {signals.length} סיגנלים · מתרענן כל 2 דק'
+        </div>
+      )}
+
+      {!isLoading && data?.source && (
+        <div className="py-1 text-center text-xs text-gray-600">
+          מקור:{" "}
+          {data.source === "yfinance_unusual_options"
+            ? "yfinance Options Activity"
+            : "FlashAlpha Signals"}
         </div>
       )}
     </div>
