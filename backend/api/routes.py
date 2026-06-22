@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -12,6 +14,28 @@ from pydantic import BaseModel
 from dataclasses import asdict, is_dataclass
 
 logger = logging.getLogger(__name__)
+
+
+# ───────── /gex/levels candle cache ─────────
+# Caches the full response per ticker for 5 minutes to avoid hammering Yahoo
+# on every chart refresh (UI auto-refetches every 60s).
+_CANDLE_CACHE: dict[str, tuple[dict[str, Any], float]] = {}
+_CANDLE_CACHE_TTL = 300  # seconds
+
+
+def _get_candle_cache(ticker: str) -> Optional[dict[str, Any]]:
+    entry = _CANDLE_CACHE.get(ticker)
+    if not entry:
+        return None
+    data, ts = entry
+    if time.time() - ts < _CANDLE_CACHE_TTL:
+        return data
+    del _CANDLE_CACHE[ticker]
+    return None
+
+
+def _set_candle_cache(ticker: str, data: dict[str, Any]) -> None:
+    _CANDLE_CACHE[ticker] = (data, time.time())
 
 from agent.autonomous_agent import get_autonomous_agent
 from analytics.gex_calculator import GEXCalculator
@@ -499,10 +523,13 @@ async def iv_for_ticker(ticker: str) -> dict[str, Any]:
 @router.get("/gex/levels/{ticker}")
 async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
     """GEX key levels + OHLC candles formatted for the frontend chart."""
+    cached = _get_candle_cache(ticker)
+    if cached is not None:
+        logger.info("Candle cache HIT: %s", ticker)
+        return cached
+
     try:
-        import pandas as pd
         import pytz
-        import yfinance as yf
 
         ET = pytz.timezone("America/New_York")
         IL = pytz.timezone("Asia/Jerusalem")
@@ -515,177 +542,244 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
             now_et.weekday() < 5 and market_open_dt <= now_et <= market_close_dt
         )
 
-        yf_ticker = ticker
-        if ticker.upper() == "SPX":
-            yf_ticker = "^GSPC"
-        elif ticker.upper() == "NDX":
-            yf_ticker = "^NDX"
-        elif ticker.upper() == "VIX":
-            yf_ticker = "^VIX"
+        # Yahoo Finance symbol mapping (URL-encoded for direct HTTP).
+        YAHOO_MAP = {
+            "SPX": "%5EGSPC",
+            "NDX": "%5ENDX",
+            "VIX": "%5EVIX",
+            "RUT": "%5ERUT",
+            "DJI": "%5EDJI",
+            "SPY": "SPY",
+            "QQQ": "QQQ",
+            "IWM": "IWM",
+            "NVDA": "NVDA",
+            "TSLA": "TSLA",
+            "META": "META",
+            "AAPL": "AAPL",
+            "AMD": "AMD",
+            "MSFT": "MSFT",
+            "AMZN": "AMZN",
+        }
+        yahoo_sym = YAHOO_MAP.get(ticker.upper(), ticker.upper())
 
-        def _fetch_yfinance_sync(symbol: str) -> list[dict[str, Any]]:
-            """Sync yfinance fetch – wrapped in a thread + asyncio.wait_for timeout below."""
-            result: list[dict[str, Any]] = []
-            try:
-                t = yf.Ticker(symbol)
-                h = t.history(period="1d", interval="1m", prepost=False, timeout=15)
-                if h is None or h.empty:
-                    h = t.history(period="5d", interval="5m", timeout=15)
-                    if h is not None and not h.empty:
-                        last_date = h.index[-1].date()
-                        h = h[h.index.date == last_date]
-                if h is None or h.empty:
-                    return []
-
-                if len(h) > 50:
-                    try:
-                        h = h.resample("5min").agg(
-                            {"Open": "first", "High": "max", "Low": "min",
-                             "Close": "last", "Volume": "sum"}
-                        ).dropna()
-                    except Exception:  # noqa: BLE001
-                        pass
-
-                for ts, row in h.iterrows():
-                    try:
-                        ts_il = ts.astimezone(IL) if ts.tzinfo else ts
-                        ts_et = ts.astimezone(ET) if ts.tzinfo else ts
-                        result.append(
-                            {
-                                "time": int(ts.timestamp()),
-                                "time_il": ts_il.strftime("%H:%M"),
-                                "time_et": ts_et.strftime("%H:%M"),
-                                "open": round(float(row["Open"]), 2),
-                                "high": round(float(row["High"]), 2),
-                                "low": round(float(row["Low"]), 2),
-                                "close": round(float(row["Close"]), 2),
-                                "volume": int(row.get("Volume", 0) or 0),
-                            }
-                        )
-                    except Exception:  # noqa: BLE001
-                        continue
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("yfinance sync error: %s", exc)
-            return result
-
-        # Run yfinance in a thread with a hard 30s timeout. yfinance can hang
-        # indefinitely on Railway when Yahoo is rate-limiting the egress IP.
         candles: list[dict[str, Any]] = []
+        spot: float = 0.0
+
+        async def fetch_yahoo_v8(symbol: str) -> list[dict[str, Any]]:
+            """Pure-HTTP Yahoo Finance Chart API v8 fetch (no yfinance pkg)."""
+            today_str = datetime.now(ET).strftime("%Y-%m-%d")
+            urls_to_try = [
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d",
+                f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d",
+                # Fallback: 15-min over 5 days, then filter to today only.
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=15m&range=5d",
+            ]
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36"
+                ),
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip, deflate",
+            }
+
+            for url in urls_to_try:
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=15.0, follow_redirects=True
+                    ) as client:
+                        resp = await client.get(url, headers=headers)
+                    if resp.status_code != 200:
+                        continue
+
+                    jdata = resp.json()
+                    chart = jdata.get("chart") or {}
+                    if chart.get("error"):
+                        continue
+                    res = chart.get("result") or []
+                    if not res:
+                        continue
+
+                    r0 = res[0]
+                    timestamps = r0.get("timestamp") or []
+                    indicators = (r0.get("indicators") or {}).get("quote") or []
+                    if not indicators or not timestamps:
+                        continue
+                    q = indicators[0]
+                    opens = q.get("open") or []
+                    highs = q.get("high") or []
+                    lows = q.get("low") or []
+                    closes = q.get("close") or []
+                    volumes = q.get("volume") or []
+                    if not closes:
+                        continue
+
+                    is_15m = "15m" in url
+                    candle_list: list[dict[str, Any]] = []
+                    for i, ts_val in enumerate(timestamps):
+                        if i >= len(closes) or closes[i] is None:
+                            continue
+                        try:
+                            ts_dt_il = datetime.fromtimestamp(ts_val, tz=IL)
+                            ts_dt_et = datetime.fromtimestamp(ts_val, tz=ET)
+                            # On 15m fallback keep only today's bars.
+                            if is_15m and ts_dt_et.strftime("%Y-%m-%d") != today_str:
+                                continue
+
+                            close_p = float(closes[i])
+                            open_p = float(
+                                opens[i]
+                                if i < len(opens) and opens[i] is not None
+                                else close_p
+                            )
+                            high_p = float(
+                                highs[i]
+                                if i < len(highs) and highs[i] is not None
+                                else close_p
+                            )
+                            low_p = float(
+                                lows[i]
+                                if i < len(lows) and lows[i] is not None
+                                else close_p
+                            )
+                            vol = int(
+                                volumes[i]
+                                if i < len(volumes) and volumes[i] is not None
+                                else 0
+                            )
+                            candle_list.append(
+                                {
+                                    "time": int(ts_val),
+                                    "time_il": ts_dt_il.strftime("%H:%M"),
+                                    "time_et": ts_dt_et.strftime("%H:%M"),
+                                    "open": round(open_p, 2),
+                                    "high": round(high_p, 2),
+                                    "low": round(low_p, 2),
+                                    "close": round(close_p, 2),
+                                    "volume": vol,
+                                }
+                            )
+                        except Exception:  # noqa: BLE001
+                            continue
+
+                    if len(candle_list) >= 3:
+                        logger.info(
+                            "✅ Yahoo v8: %d candles for %s",
+                            len(candle_list),
+                            symbol,
+                        )
+                        return candle_list
+                except httpx.TimeoutException:
+                    logger.warning("Yahoo timeout for %s @ %s", symbol, url)
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Yahoo fetch error (%s): %s", symbol, exc)
+                    continue
+            return []
+
         try:
             candles = await asyncio.wait_for(
-                asyncio.to_thread(_fetch_yfinance_sync, yf_ticker), timeout=30.0
+                fetch_yahoo_v8(yahoo_sym), timeout=25.0
             )
+            if candles:
+                spot = candles[-1]["close"]
+                logger.info(
+                    "✅ Candles ready: %d, spot=%s", len(candles), spot
+                )
         except asyncio.TimeoutError:
-            logger.warning("yfinance timeout for %s", yf_ticker)
+            logger.warning("fetch_yahoo_v8 timed out for %s", yahoo_sym)
             candles = []
         except Exception as exc:  # noqa: BLE001
-            logger.warning("yfinance executor error: %s", exc)
+            logger.warning("fetch_yahoo_v8 error: %s", exc)
             candles = []
 
-        spot = candles[-1]["close"] if candles else 0.0
-        if candles:
-            logger.info(
-                "✅ yfinance: %d candles for %s, spot=%s", len(candles), yf_ticker, spot
-            )
-
-        # Yahoo direct-HTTP fallback when the yfinance lib path is blocked.
-        if not candles or spot == 0:
+        # Spot-only fetch (last-resort price probe) if no candles came back.
+        if not candles or spot <= 0:
+            logger.warning("No candles for %s, trying spot-only fetch", ticker)
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                async with httpx.AsyncClient(timeout=8.0) as client:
                     resp = await client.get(
-                        f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_ticker}",
-                        params={"interval": "5m", "range": "1d"},
+                        f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_sym}"
+                        f"?interval=1d&range=1d",
                         headers={"User-Agent": "Mozilla/5.0"},
                     )
                 if resp.status_code == 200:
-                    jdata = resp.json()
-                    result = (jdata.get("chart") or {}).get("result") or []
-                    if result:
-                        meta = result[0].get("meta") or {}
-                        spot = float(meta.get("regularMarketPrice") or 0)
-                        timestamps = result[0].get("timestamp") or []
-                        ind = (result[0].get("indicators") or {}).get("quote") or [{}]
-                        ind = ind[0] if ind else {}
-                        opens = ind.get("open") or []
-                        highs = ind.get("high") or []
-                        lows = ind.get("low") or []
-                        closes = ind.get("close") or []
-                        volumes = ind.get("volume") or []
-                        for i, ts_val in enumerate(timestamps):
-                            try:
-                                if i >= len(closes) or closes[i] is None:
-                                    continue
-                                ts_dt_il = datetime.fromtimestamp(ts_val, tz=IL)
-                                ts_dt_et = datetime.fromtimestamp(ts_val, tz=ET)
-                                close_val = float(closes[i])
-                                candles.append(
-                                    {
-                                        "time": int(ts_val),
-                                        "time_il": ts_dt_il.strftime("%H:%M"),
-                                        "time_et": ts_dt_et.strftime("%H:%M"),
-                                        "open": round(float(opens[i] or close_val), 2),
-                                        "high": round(float(highs[i] or close_val), 2),
-                                        "low": round(float(lows[i] or close_val), 2),
-                                        "close": round(close_val, 2),
-                                        "volume": int(volumes[i] or 0)
-                                        if i < len(volumes)
-                                        else 0,
-                                    }
-                                )
-                            except Exception:  # noqa: BLE001
-                                continue
-                        if candles:
-                            spot = candles[-1]["close"]
-                            logger.info("✅ Yahoo direct API fallback: spot=%s", spot)
+                    jd = resp.json()
+                    rs = (jd.get("chart") or {}).get("result") or []
+                    if rs:
+                        spot = float(
+                            (rs[0].get("meta") or {}).get("regularMarketPrice") or 0
+                        )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Yahoo direct API fallback failed: %s", exc)
+                logger.warning("Spot-only fetch error: %s", exc)
 
-        # Final fallback: realistic synthetic candles with seeded randomness.
-        if not candles or spot == 0:
-            import random as _random
-
-            default_prices = {
-                "SPX": 5880, "^GSPC": 5880,
+        # Final fallback: realistic synthetic candles. Never use 100 as default
+        # — the canvas can't render that range against levels in the thousands.
+        if not candles or spot <= 0:
+            REAL_PRICES = {
+                "SPX": 5880, "%5EGSPC": 5880,
                 "SPY": 588, "QQQ": 510,
-                "NDX": 21400, "^NDX": 21400,
-                "IWM": 212, "VIX": 18, "^VIX": 18,
-                "DJI": 43000, "^DJI": 43000,
-                "NVDA": 135, "TSLA": 340, "META": 625,
-                "AAPL": 230, "AMD": 165, "MSFT": 420,
-                "GOOGL": 180, "AMZN": 200,
+                "NDX": 21400, "%5ENDX": 21400,
+                "IWM": 213, "VIX": 17, "%5EVIX": 17,
+                "RUT": 2120, "%5ERUT": 2120,
+                "DJI": 43000, "%5EDJI": 43000,
+                "NVDA": 138, "TSLA": 345, "META": 630,
+                "AAPL": 234, "AMD": 168, "MSFT": 475,
+                "AMZN": 232, "GOOGL": 195,
             }
             spot = float(
-                default_prices.get(yf_ticker)
-                or default_prices.get(ticker.upper(), 500)
+                REAL_PRICES.get(yahoo_sym)
+                or REAL_PRICES.get(ticker.upper(), 500)
             )
-            now_il = datetime.now(IL)
-            start = now_il.replace(hour=16, minute=30, second=0, microsecond=0)
-            current_price = spot * 0.995
-            _random.seed(42)
-            for i in range(78):  # 6.5 hours × 12 five-minute bars
-                ts = start + timedelta(minutes=5 * i)
-                if ts > now_il:
-                    break
-                move = _random.uniform(-0.0015, 0.0018)
-                current_price = current_price * (1 + move)
-                ts_et = ts.astimezone(ET) if ts.tzinfo else ts
-                candles.append(
-                    {
-                        "time": int(ts.timestamp()),
-                        "time_il": ts.strftime("%H:%M"),
-                        "time_et": ts_et.strftime("%H:%M"),
-                        "open": round(current_price, 2),
-                        "high": round(current_price * 1.0008, 2),
-                        "low": round(current_price * 0.9992, 2),
-                        "close": round(current_price, 2),
-                        "volume": _random.randint(50_000, 200_000),
-                    }
-                )
-            if candles:
-                spot = candles[-1]["close"]
+            if spot <= 100:
+                spot = 500.0
+
             logger.warning(
                 "Using synthetic candles for %s, spot=%s", ticker, spot
             )
+
+            import random as _random
+
+            # Anchor synthetic series to the last open session in ET so the
+            # x-axis labels match Israel time conversion correctly.
+            market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            if market_open > now_et:
+                market_open -= timedelta(days=1)
+            while market_open.weekday() >= 5:
+                market_open -= timedelta(days=1)
+
+            _random.seed(int(spot))  # deterministic per-ticker shape
+            current_price = spot * 0.9985
+            ts_ptr = market_open
+            while ts_ptr <= now_et:
+                ts_il = ts_ptr.astimezone(IL)
+                move = _random.gauss(0.00008, 0.0012)
+                current_price *= (1 + move)
+                o = round(current_price, 2)
+                wick_h = _random.uniform(0.0002, 0.0015)
+                wick_l = _random.uniform(0.0002, 0.0015)
+                close_move = _random.gauss(0, 0.0008)
+                c = round(current_price * (1 + close_move), 2)
+                h = round(max(o, c) * (1 + wick_h), 2)
+                low = round(min(o, c) * (1 - wick_l), 2)
+                vol = int(_random.uniform(50_000, 300_000))
+
+                candles.append(
+                    {
+                        "time": int(ts_ptr.timestamp()),
+                        "time_il": ts_il.strftime("%H:%M"),
+                        "time_et": ts_ptr.strftime("%H:%M"),
+                        "open": o,
+                        "high": h,
+                        "low": low,
+                        "close": c,
+                        "volume": vol,
+                    }
+                )
+                ts_ptr += timedelta(minutes=5)
+
+            if candles:
+                spot = candles[-1]["close"]
 
         call_wall: Optional[float] = None
         put_wall: Optional[float] = None
@@ -888,7 +982,7 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
             day_change = 0.0
             day_change_pct = 0.0
 
-        return {
+        result_dict = {
             "ticker": ticker,
             "spot": spot,
             "regime": regime,
@@ -910,6 +1004,8 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
             },
             "timestamp": datetime.utcnow().isoformat(),
         }
+        _set_candle_cache(ticker, result_dict)
+        return result_dict
 
     except HTTPException:
         raise
@@ -917,7 +1013,14 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
         logger.exception("gex_levels_chart failed for %s – returning empty shell", ticker)
         # Never 500 the chart endpoint – the UI shows "שגיאה בטעינת נתונים".
         # Return a minimal valid payload so the chart at least renders empty.
-        fallback_spot = 100.0
+        # Use a real per-ticker price (never 100, which collapses the canvas).
+        EMPTY_SHELL_PRICES = {
+            "SPX": 5880, "SPY": 588, "QQQ": 510, "NDX": 21400,
+            "IWM": 213, "VIX": 17, "RUT": 2120, "DJI": 43000,
+            "NVDA": 138, "TSLA": 345, "META": 630, "AAPL": 234,
+            "AMD": 168, "MSFT": 475, "AMZN": 232, "GOOGL": 195,
+        }
+        fallback_spot = float(EMPTY_SHELL_PRICES.get(ticker.upper(), 500))
         return {
             "ticker": ticker,
             "spot": fallback_spot,
@@ -1776,6 +1879,57 @@ async def fa_account() -> dict[str, Any]:
     from tools.flashalpha_tool import FlashAlphaTool
     result = await FlashAlphaTool().get_account()
     return result or {"error": "failed"}
+
+
+# ───────────────────────── debug ─────────────────────────
+
+@router.get("/debug/candles/{ticker}")
+async def debug_candles(ticker: str) -> dict[str, Any]:
+    """Diagnose Yahoo v8 candle fetching for a ticker.
+
+    Returns status code, candle count, spot, and any error string so you can
+    see if Yahoo is reachable from the deployment without rendering the chart.
+    """
+    import pytz as _pytz
+
+    IL = _pytz.timezone("Asia/Jerusalem")
+    YAHOO_MAP = {
+        "SPX": "%5EGSPC",
+        "NDX": "%5ENDX",
+        "VIX": "%5EVIX",
+        "RUT": "%5ERUT",
+        "SPY": "SPY",
+        "QQQ": "QQQ",
+        "IWM": "IWM",
+    }
+    sym = YAHOO_MAP.get(ticker.upper(), ticker.upper())
+
+    results: dict[str, Any] = {
+        "ticker": ticker,
+        "yahoo_symbol": sym,
+        "timestamp": datetime.now(IL).strftime("%H:%M %d/%m/%Y"),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+                f"?interval=5m&range=1d",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+        results["yahoo_v8_status"] = resp.status_code
+        if resp.status_code == 200:
+            jd = resp.json()
+            rs = (jd.get("chart") or {}).get("result") or []
+            if rs:
+                meta = rs[0].get("meta") or {}
+                results["spot"] = meta.get("regularMarketPrice")
+                ts = rs[0].get("timestamp") or []
+                results["candle_count"] = len(ts)
+    except Exception as exc:  # noqa: BLE001
+        results["yahoo_v8_error"] = str(exc)
+
+    return results
 
 
 @router.get("/scanner/momentum")

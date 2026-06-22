@@ -161,7 +161,18 @@ function CandleChart({
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container || !candles.length) return;
+    if (!canvas || !container) {
+      console.warn("GEXChart: canvas or container missing");
+      return;
+    }
+    if (!candles.length) {
+      console.warn("GEXChart: no candles to draw");
+      return;
+    }
+    console.log(
+      `GEXChart: drawing ${candles.length} candles, spot=${spot}, ` +
+        `first=${candles[0]?.close}, last=${candles[candles.length - 1]?.close}`,
+    );
 
     const dpr = window.devicePixelRatio || 1;
     const W = container.clientWidth;
@@ -451,6 +462,12 @@ function CandleChart({
         onMouseLeave={() => setHoverInfo(null)}
       />
 
+      {candles.length > 0 && spot > 0 && (
+        <div className="pointer-events-none absolute top-2 left-2 text-xs text-gray-600">
+          {candles.length} נרות
+        </div>
+      )}
+
       {hoverInfo?.candle && (
         <div
           className="pointer-events-none absolute z-20 min-w-36 rounded-lg border border-gray-700 bg-gray-900/95 px-3 py-2 text-xs shadow-xl"
@@ -601,13 +618,16 @@ function LevelList({ levels, spot }: { levels: Level[]; spot: number }) {
 
 export default function GEXChart() {
   const [ticker, setTicker] = useState("SPX");
+  const [forceKey, setForceKey] = useState(0);
 
   const { data, isLoading, isError, refetch, dataUpdatedAt } = useQuery({
-    queryKey: ["gex-levels", ticker],
+    queryKey: ["gex-levels", ticker, forceKey],
     queryFn: () => fetchGEXLevels(ticker),
     refetchInterval: 60 * 1000,
-    retry: 2,
-    staleTime: 30 * 1000,
+    retry: 3,
+    retryDelay: 2000,
+    staleTime: 0,
+    gcTime: 5 * 60 * 1000,
   });
 
   const lastUpdate = dataUpdatedAt
@@ -661,7 +681,10 @@ export default function GEXChart() {
             </div>
           )}
           <button
-            onClick={() => refetch()}
+            onClick={() => {
+              setForceKey((k) => k + 1);
+              refetch();
+            }}
             className="rounded-xl bg-gray-800 p-2.5 text-lg transition-colors active:bg-gray-700"
             aria-label="רענן"
           >
