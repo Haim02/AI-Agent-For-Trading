@@ -1690,6 +1690,94 @@ async def fa_signals(
     }
 
 
+# ───────────────────────── FlashAlpha SDK extras ─────────────────────────
+
+@router.get("/flashalpha/greeks")
+async def calc_greeks(
+    spot: float,
+    strike: float,
+    dte: int,
+    sigma: float,
+    type: str = "call",
+    rate: float = 0.05,
+) -> dict[str, Any]:
+    """Calculate all 15 BSM Greeks via FlashAlpha SDK. FREE on any plan."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    result = await FlashAlphaTool().get_greeks(
+        spot=spot, strike=strike, dte=dte,
+        sigma=sigma, opt_type=type, rate=rate,
+    )
+    if not result:
+        raise HTTPException(status_code=500, detail="Greeks calculation failed")
+    return result
+
+
+@router.get("/flashalpha/iv")
+async def calc_iv(
+    spot: float,
+    strike: float,
+    dte: int,
+    price: float,
+    type: str = "call",
+) -> dict[str, Any]:
+    """Implied Volatility solver via FlashAlpha SDK. FREE on any plan."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    result = await FlashAlphaTool().get_iv(
+        spot=spot, strike=strike, dte=dte,
+        price=price, opt_type=type,
+    )
+    if not result:
+        raise HTTPException(status_code=500, detail="IV failed")
+    return result
+
+
+@router.get("/flashalpha/dex/{ticker}")
+async def fa_dex(ticker: str) -> dict[str, Any]:
+    """Delta Exposure by strike."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    return await FlashAlphaTool().get_dex(ticker.upper().strip()) or {}
+
+
+@router.get("/flashalpha/vex/{ticker}")
+async def fa_vex(ticker: str) -> dict[str, Any]:
+    """Vanna Exposure by strike (powerful for vol traders)."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    return await FlashAlphaTool().get_vex(ticker.upper().strip()) or {}
+
+
+@router.get("/flashalpha/chex/{ticker}")
+async def fa_chex(ticker: str) -> dict[str, Any]:
+    """Charm Exposure by strike."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    return await FlashAlphaTool().get_chex(ticker.upper().strip()) or {}
+
+
+@router.get("/flashalpha/kelly")
+async def calc_kelly(
+    spot: float,
+    strike: float,
+    dte: int,
+    sigma: float,
+    premium: float,
+    mu: float = 0.10,
+) -> dict[str, Any]:
+    """Kelly Criterion optimal position sizing. Requires Growth+ plan."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    result = await FlashAlphaTool().get_kelly(
+        spot=spot, strike=strike, dte=dte,
+        sigma=sigma, premium=premium, mu=mu,
+    )
+    return result or {"error": "plan_required"}
+
+
+@router.get("/flashalpha/account")
+async def fa_account() -> dict[str, Any]:
+    """Check FlashAlpha account plan and daily usage."""
+    from tools.flashalpha_tool import FlashAlphaTool
+    result = await FlashAlphaTool().get_account()
+    return result or {"error": "failed"}
+
+
 @router.get("/scanner/momentum")
 async def scan_momentum(limit: int = 20) -> dict[str, Any]:
     """Live FinViz momentum scan with chart URLs + Perplexity news reasons."""

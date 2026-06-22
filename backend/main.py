@@ -43,13 +43,46 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("GEX Knowledge load failed: %s", exc)
 
-    # FlashAlpha primary GEX source.
-    if os.getenv("FLASHALPHA_API_KEY"):
-        logger.info("✅ FlashAlpha API key found – will be used as primary GEX source")
-    else:
+    # FlashAlpha primary GEX source – verify the official SDK is importable
+    # and log the active plan + daily usage so the operator can spot quota
+    # issues before they bite during the trading day.
+    try:
+        import flashalpha as _flashalpha_pkg
+
+        fa_key = os.getenv("FLASHALPHA_API_KEY", "")
+        if fa_key:
+            from flashalpha import FlashAlpha as _FlashAlpha
+
+            fa_client = _FlashAlpha(fa_key)
+            try:
+                health = fa_client.health()
+                logger.info(
+                    "✅ FlashAlpha SDK v%s | status: %s",
+                    getattr(_flashalpha_pkg, "__version__", "?"),
+                    health.get("status") if health else "?",
+                )
+            except Exception as health_exc:  # noqa: BLE001
+                logger.warning("FlashAlpha health check failed: %s", health_exc)
+
+            try:
+                acct = fa_client.account()
+                plan = acct.get("plan", "unknown") if acct else "unknown"
+                usage = (acct or {}).get("usage", {}) or {}
+                daily = usage.get("daily_requests_used", "?")
+                limit = usage.get("daily_requests_limit", "?")
+                logger.info("   Plan: %s | Usage: %s/%s today", plan, daily, limit)
+            except Exception as acct_exc:  # noqa: BLE001
+                logger.warning("FlashAlpha account fetch failed: %s", acct_exc)
+        else:
+            logger.warning(
+                "⚠️ FLASHALPHA_API_KEY not set – using fallback GEX sources (UW/Massive/yfinance)"
+            )
+    except ImportError:
         logger.warning(
-            "⚠️ FLASHALPHA_API_KEY not set – using fallback GEX sources (UW/Massive/yfinance)"
+            "⚠️ flashalpha package not installed. Run: pip install flashalpha"
         )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("FlashAlpha init error: %s", exc)
 
     # Unusual Whales credentials check — best-effort, doesn't block startup.
     uw_email = os.getenv("UW_EMAIL", "")

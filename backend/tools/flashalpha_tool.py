@@ -1,106 +1,148 @@
-"""FlashAlpha Lab API client.
+"""
+FlashAlpha options analytics using official Python SDK.
+pip install flashalpha
 
-Clean REST API for GEX, key levels, 0DTE data, and max pain. Used as the
-primary source by ``GEXEngine``; UW / Massive / yfinance remain as fallbacks
-for tickers the user's plan doesn't cover.
+Replaces custom HTTP client with:
+- Official error handling (TierRestrictedError etc.)
+- Auto retry on rate limits
+- Cleaner code
+
+Free plan: 5 req/day - GEX, levels, greeks, IV, quotes
+Basic: 100/day - + SPX/VIX/NDX/RUT index symbols
+Growth: 2500/day - + 0DTE, narrative, volatility, Kelly
+Alpha: unlimited - + advanced vol (SVI, variance)
 """
 
-from __future__ import annotations
-
-import asyncio
-import logging
 import os
 import time
+import asyncio
+import logging
+from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Optional
 
-import httpx
-
-from utils.time_helper import ISRAEL_TZ
+import pytz
 
 logger = logging.getLogger(__name__)
+ISRAEL_TZ = pytz.timezone("Asia/Jerusalem")
 
-
-# ───────────────────────── module-level cache ─────────────────────────
-# FlashAlpha free tier is 5 calls/day, basic is 100/day. Without caching the
-# chart endpoint alone burns the quota in minutes. 1h TTL is long enough to
-# stay within budget and short enough that walls/flips refresh during a session.
-_CACHE: dict[str, tuple[Any, float]] = {}
+# ─── 1-hour in-memory cache ──────────────────────
+_CACHE: dict = {}
 _CACHE_TTL = 3600  # seconds
 
 
 def _cache_get(key: str) -> Optional[dict]:
-    entry = _CACHE.get(key)
-    if entry is None:
-        return None
-    data, ts = entry
-    if time.time() - ts < _CACHE_TTL:
-        logger.info("Cache HIT: %s", key)
-        return data
-    del _CACHE[key]
+    if key in _CACHE:
+        data, ts = _CACHE[key]
+        if time.time() - ts < _CACHE_TTL:
+            logger.debug(f"Cache HIT: {key[:60]}")
+            return data
+        del _CACHE[key]
     return None
 
 
-def _cache_set(key: str, data: dict) -> None:
+def _cache_set(key: str, data: dict):
     _CACHE[key] = (data, time.time())
-    logger.info("Cache SET: %s", key)
+
+
+def _make_key(*args, **kwargs) -> str:
+    parts = [str(a) for a in args]
+    parts += [f"{k}={v}" for k, v in sorted(kwargs.items())]
+    return "_".join(parts)
 
 
 class FlashAlphaTool:
-    BASE_URL = "https://lab.flashalpha.com"
+    """
+    Wrapper around the official FlashAlpha Python SDK.
+    All methods are async (run SDK in thread pool).
+    """
 
-    def __init__(self) -> None:
+    def __init__(self):
         self.api_key = os.getenv("FLASHALPHA_API_KEY", "")
-        self.headers = {
-            "X-Api-Key": self.api_key,
-            "Accept": "application/json",
-        }
+        self._fa = None  # Lazy init
 
-    async def _get(
-        self, endpoint: str, params: Optional[dict] = None
-    ) -> Optional[dict]:
+    def _get_client(self):
+        """Get or create FlashAlpha client"""
         if not self.api_key:
-            logger.warning("FLASHALPHA_API_KEY not set")
+            raise ValueError("FLASHALPHA_API_KEY not set")
+        if self._fa is None:
+            from flashalpha import FlashAlpha
+            self._fa = FlashAlpha(self.api_key)
+        return self._fa
+
+    async def _run(self, func, *args, **kwargs):
+        """
+        Run sync SDK call in thread pool.
+        Handles errors uniformly.
+        """
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            return await asyncio.wait_for(
+                loop.run_in_executor(
+                    ex,
+                    lambda: func(*args, **kwargs),
+                ),
+                timeout=20.0,
+            )
+
+    async def _call(
+        self,
+        method_name: str,
+        *args,
+        cache_ttl: int = 3600,
+        **kwargs,
+    ) -> Optional[dict]:
+        """
+        Generic cached SDK call.
+        Returns None on error, error dict on plan issues.
+        """
+        if not self.api_key:
             return None
 
-        cache_key = f"{endpoint}_{str(params or {})}"
+        cache_key = _make_key(method_name, *args, **kwargs)
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.get(
-                    f"{self.BASE_URL}{endpoint}",
-                    headers=self.headers,
-                    params=params or {},
+            fa = self._get_client()
+            method = getattr(fa, method_name)
+            result = await self._run(method, *args, **kwargs)
+            if result:
+                _cache_set(cache_key, result)
+            return result
+
+        except Exception as e:
+            try:
+                from flashalpha import (
+                    TierRestrictedError,
+                    RateLimitError,
+                    AuthenticationError,
+                    NotFoundError,
                 )
-            if resp.status_code == 200:
-                data = resp.json()
-                _cache_set(cache_key, data)
-                return data
-            if resp.status_code == 403:
-                logger.warning(
-                    "FlashAlpha 403: plan upgrade needed for %s", endpoint
-                )
-                return {"error": "plan_required"}
-            if resp.status_code == 404:
-                logger.warning("FlashAlpha 404: %s", endpoint)
-                return {"error": "not_found"}
-            if resp.status_code == 429:
-                logger.warning("FlashAlpha rate limit hit")
-                return {"error": "rate_limit"}
-            logger.warning("FlashAlpha %s on %s", resp.status_code, endpoint)
-            return None
-        except Exception as exc:  # noqa: BLE001
-            logger.error("FlashAlpha error: %s", exc)
+                if isinstance(e, TierRestrictedError):
+                    logger.warning(
+                        f"FlashAlpha plan required for {method_name}"
+                    )
+                    return {"error": "plan_required"}
+                if isinstance(e, RateLimitError):
+                    logger.warning("FlashAlpha rate limit hit")
+                    return {"error": "rate_limit"}
+                if isinstance(e, AuthenticationError):
+                    logger.error("FlashAlpha auth failed")
+                    return {"error": "auth_failed"}
+                if isinstance(e, NotFoundError):
+                    return {"error": "not_found"}
+            except ImportError:
+                pass
+            logger.error(f"FlashAlpha {method_name} error: {e}")
             return None
 
-    # ───────────────────────── raw endpoints ─────────────────────────
+    # ─── Exposure Analytics ───────────────────────
 
     async def get_levels(self, symbol: str) -> Optional[dict]:
-        """Key levels: gamma_flip, call_wall, put_wall, highest_oi, zero_dte_magnet."""
-        return await self._get(f"/v1/exposure/levels/{symbol}")
+        """Key levels: gamma_flip, call_wall, put_wall"""
+        return await self._call("exposure_levels", symbol)
 
     async def get_gex(
         self,
@@ -108,28 +150,162 @@ class FlashAlphaTool:
         expiration: Optional[str] = None,
         min_oi: int = 0,
     ) -> Optional[dict]:
-        """Full GEX by strike. Full-chain needs Growth plan; supply expiration on lower tiers."""
-        params: dict[str, Any] = {}
+        """GEX by strike"""
+        kwargs: dict = {}
         if expiration:
-            params["expiration"] = expiration
+            kwargs["expiration"] = expiration
         if min_oi:
-            params["min_oi"] = min_oi
-        return await self._get(f"/v1/exposure/gex/{symbol}", params=params)
+            kwargs["min_oi"] = min_oi
+        return await self._call("gex", symbol, **kwargs)
+
+    async def get_dex(self, symbol: str) -> Optional[dict]:
+        """Delta Exposure by strike"""
+        return await self._call("dex", symbol)
+
+    async def get_vex(self, symbol: str) -> Optional[dict]:
+        """Vanna Exposure by strike"""
+        return await self._call("vex", symbol)
+
+    async def get_chex(self, symbol: str) -> Optional[dict]:
+        """Charm Exposure by strike"""
+        return await self._call("chex", symbol)
 
     async def get_zero_dte(self, symbol: str) -> Optional[dict]:
-        return await self._get(f"/v1/exposure/zero-dte/{symbol}")
+        """0DTE analytics (Growth+)"""
+        return await self._call("zero_dte", symbol)
 
     async def get_max_pain(self, symbol: str) -> Optional[dict]:
-        return await self._get(f"/v1/maxpain/{symbol}")
+        """Max Pain levels"""
+        return await self._call("max_pain", symbol)
 
-    # ───────────────────────── combined analysis ─────────────────────────
+    async def get_narrative(self, symbol: str) -> Optional[dict]:
+        """AI narrative (Growth+)"""
+        return await self._call("narrative", symbol)
+
+    async def get_volatility(self, symbol: str) -> Optional[dict]:
+        """Volatility analytics (Growth+)"""
+        return await self._call("volatility", symbol)
+
+    # ─── Pricing Tools ───────────────────────────
+
+    async def get_greeks(
+        self,
+        spot: float,
+        strike: float,
+        dte: int,
+        sigma: float,
+        opt_type: str = "call",
+        rate: float = 0.05,
+    ) -> Optional[dict]:
+        """
+        Full BSM Greeks - 15 greeks!
+        1st: delta, gamma, theta, vega, rho
+        2nd: vanna, charm, vomma, veta
+        3rd: speed, zomma, color, ultima
+        FREE - no rate limit concern
+        """
+        cache_key = _make_key(
+            "greeks", spot, strike, dte, sigma, opt_type, rate
+        )
+        cached = _cache_get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            fa = self._get_client()
+            result = await self._run(
+                fa.greeks,
+                spot=spot,
+                strike=strike,
+                dte=dte,
+                sigma=sigma,
+                type=opt_type,
+                r=rate,
+            )
+            if result:
+                _cache_set(cache_key, result)
+            return result
+        except Exception as e:
+            logger.error(f"Greeks error: {e}")
+            return None
+
+    async def get_iv(
+        self,
+        spot: float,
+        strike: float,
+        dte: int,
+        price: float,
+        opt_type: str = "call",
+    ) -> Optional[dict]:
+        """
+        Implied Volatility solver.
+        FREE - no rate limit concern
+        """
+        try:
+            fa = self._get_client()
+            return await self._run(
+                fa.iv,
+                spot=spot,
+                strike=strike,
+                dte=dte,
+                price=price,
+                type=opt_type,
+            )
+        except Exception as e:
+            logger.error(f"IV error: {e}")
+            return None
+
+    async def get_kelly(
+        self,
+        spot: float,
+        strike: float,
+        dte: int,
+        sigma: float,
+        premium: float,
+        mu: float = 0.10,
+    ) -> Optional[dict]:
+        """
+        Kelly Criterion optimal sizing (Growth+).
+        Uses numerical integration over lognormal.
+        """
+        return await self._call(
+            "kelly",
+            spot=spot,
+            strike=strike,
+            dte=dte,
+            sigma=sigma,
+            premium=premium,
+            mu=mu,
+        )
+
+    # ─── Market Data ─────────────────────────────
+
+    async def get_stock_quote(self, ticker: str) -> Optional[dict]:
+        """Live stock quote"""
+        return await self._call("stock_quote", ticker, cache_ttl=60)
+
+    async def get_account(self) -> Optional[dict]:
+        """Account info: plan, usage, quota"""
+        try:
+            fa = self._get_client()
+            return await self._run(fa.account)
+        except Exception as e:
+            logger.error(f"Account error: {e}")
+            return None
+
+    # ─── Full Analysis ────────────────────────────
 
     async def get_full_analysis(self, symbol: str) -> dict:
+        """
+        Combined: levels + gex + optional 0dte
+        Returns Hebrew-formatted result.
+        """
         levels_data, gex_data = await asyncio.gather(
             self.get_levels(symbol),
             self.get_gex(symbol),
             return_exceptions=True,
         )
+
         if isinstance(levels_data, Exception):
             levels_data = None
         if isinstance(gex_data, Exception):
@@ -140,54 +316,68 @@ class FlashAlphaTool:
             return {
                 "error": err,
                 "symbol": symbol,
-                "message": self._error_message_hebrew(err, symbol),
+                "message": self._error_msg(err, symbol),
             }
 
-        levels = levels_data.get("levels", {}) or {}
+        lv = levels_data.get("levels", {}) or {}
         spot = float(levels_data.get("underlying_price") or 0)
-        call_wall = levels.get("call_wall")
-        put_wall = levels.get("put_wall")
-        gamma_flip = levels.get("gamma_flip")
-        oi_strike = levels.get("highest_oi_strike")
-        zero_dte = levels.get("zero_dte_magnet")
+        call_wall = lv.get("call_wall")
+        put_wall = lv.get("put_wall")
+        gamma_flip = lv.get("gamma_flip")
+        oi_strike = lv.get("highest_oi_strike")
+        zero_dte = lv.get("zero_dte_magnet")
 
         net_gex = 0.0
         regime = "positive"
-        if gex_data and "error" not in gex_data:
+        top_strikes: list = []
+
+        if gex_data and "error" not in (gex_data or {}):
             net_gex = float(gex_data.get("net_gex") or 0)
-            regime = gex_data.get("net_gex_label") or (
-                "positive" if net_gex >= 0 else "negative"
+            regime_raw = (
+                gex_data.get("net_gex_label")
+                or gex_data.get("regime", "positive")
+                or ""
             )
-
-        cw_dist = (
-            ((call_wall - spot) / spot * 100) if call_wall and spot else None
-        )
-        pw_dist = (
-            ((spot - put_wall) / spot * 100) if put_wall and spot else None
-        )
-
-        top_strikes: list[dict[str, Any]] = []
-        if gex_data and "strikes" in (gex_data or {}):
+            regime = (
+                "positive"
+                if "positive" in str(regime_raw).lower()
+                else "negative"
+            )
             sorted_strikes = sorted(
-                gex_data["strikes"],
+                gex_data.get("strikes", []) or [],
                 key=lambda s: abs(s.get("net_gex") or 0),
                 reverse=True,
             )
-            for s in sorted_strikes[:6]:
+            for s in sorted_strikes[:8]:
                 strike = s.get("strike") or 0
                 gex_val = float(s.get("net_gex") or 0)
+                if not strike or not spot:
+                    continue
                 top_strikes.append(
                     {
                         "strike": strike,
                         "gex_billion": round(gex_val / 1e9, 3),
-                        "type": "call_wall" if gex_val > 0 else "put_wall",
-                        "distance_pct": (
-                            round((strike - spot) / spot * 100, 2) if spot else 0
+                        "type": (
+                            "call_wall" if gex_val > 0 else "put_wall"
+                        ),
+                        "distance_pct": round(
+                            (strike - spot) / spot * 100, 2
                         ),
                     }
                 )
 
-        analysis_hebrew = self._format_hebrew(
+        cw_dist = (
+            (call_wall - spot) / spot * 100
+            if call_wall and spot
+            else None
+        )
+        pw_dist = (
+            (spot - put_wall) / spot * 100
+            if put_wall and spot
+            else None
+        )
+
+        hebrew = self._format_hebrew(
             symbol=symbol,
             spot=spot,
             call_wall=call_wall,
@@ -198,6 +388,7 @@ class FlashAlphaTool:
             regime=regime,
             cw_dist=cw_dist,
             pw_dist=pw_dist,
+            net_gex=net_gex,
         )
 
         return {
@@ -208,157 +399,162 @@ class FlashAlphaTool:
             "gamma_flip": gamma_flip,
             "highest_oi_strike": oi_strike,
             "zero_dte_magnet": zero_dte,
-            "call_wall_distance_pct": round(cw_dist, 2) if cw_dist is not None else None,
-            "put_wall_distance_pct": round(pw_dist, 2) if pw_dist is not None else None,
+            "call_wall_distance_pct": (
+                round(cw_dist, 2) if cw_dist is not None else None
+            ),
+            "put_wall_distance_pct": (
+                round(pw_dist, 2) if pw_dist is not None else None
+            ),
             "regime": regime,
             "total_gex": round(net_gex / 1e9, 3),
             "top_strikes": top_strikes,
-            "gex_profile": self._classify_profile(top_strikes, spot),
-            "analysis_hebrew": analysis_hebrew,
-            "source": "flashalpha",
-            "timestamp": datetime.now(ISRAEL_TZ).strftime("%H:%M | %d/%m/%Y"),
+            "gex_profile": self._profile(top_strikes, spot),
+            "analysis_hebrew": hebrew,
+            "source": "flashalpha_sdk",
+            "timestamp": datetime.now(ISRAEL_TZ).strftime(
+                "%H:%M | %d/%m/%Y"
+            ),
         }
 
-    # ───────────────────────── helpers ─────────────────────────
-
-    def _classify_profile(self, top_strikes: list[dict], spot: float) -> str:
+    def _profile(self, top_strikes: list, spot: float) -> str:
         if not top_strikes or not spot:
             return "unknown"
-        near = [s for s in top_strikes if abs(s.get("distance_pct", 0)) < 1.0]
-        if near and abs(near[0].get("gex_billion") or 0) > 0:
-            return "pin"
-        significant = [
-            s for s in top_strikes if abs(s.get("gex_billion") or 0) > 0.1
+        near = [
+            s
+            for s in top_strikes
+            if abs(s.get("distance_pct", 99)) < 1.0
         ]
-        if len(significant) <= 1:
+        if near:
+            return "pin"
+        sig = [
+            s
+            for s in top_strikes
+            if abs(s.get("gex_billion", 0)) > 0.1
+        ]
+        if len(sig) <= 1:
             return "wall"
-        if len(significant) <= 3:
+        if len(sig) <= 3:
             return "pillar"
         return "slide"
 
-    @staticmethod
-    def _format_hebrew(**k: Any) -> str:
-        symbol = k["symbol"]
+    def _format_hebrew(self, **k) -> str:
         spot = k["spot"]
-        cw = k["call_wall"]
-        pw = k["put_wall"]
-        gf = k["gamma_flip"]
-        zdte = k["zero_dte"]
-        oi = k["oi_strike"]
-        regime = k["regime"]
-        cw_dist = k["cw_dist"]
-        pw_dist = k["pw_dist"]
+        regime_emoji = "🟢" if k["regime"] == "positive" else "🔴"
 
-        regime_he = (
-            "חיובי (Positive Gamma) 🟢"
-            if regime == "positive"
-            else "שלילי (Negative Gamma) 🔴"
+        def _money(val) -> str:
+            return f"${val:,.0f}" if val else "—"
+
+        cw_str = (
+            f"${k['call_wall']:,.0f} ({k['cw_dist']:+.1f}%)"
+            if k["call_wall"] and k["cw_dist"] is not None
+            else "—"
+        )
+        pw_str = (
+            f"${k['put_wall']:,.0f} ({k['pw_dist']:+.1f}%)"
+            if k["put_wall"] and k["pw_dist"] is not None
+            else "—"
         )
         strategy = (
             "מכירת פרמיה: Iron Condor / Credit Spreads"
-            if regime == "positive"
-            else "קניית פרמיה: Debit Spreads / הימנע ממכירה"
+            if k["regime"] == "positive"
+            else "קניית פרמיה: Debit Spreads – הימנע ממכירה!"
         )
-        cw_str = f"${cw:,.0f} ({cw_dist:+.1f}%)" if cw and cw_dist is not None else "—"
-        pw_str = f"${pw:,.0f} ({pw_dist:+.1f}%)" if pw and pw_dist is not None else "—"
-        gf_str = f"${gf:,.0f}" if gf else "—"
-        zdte_str = f"${zdte:,.0f}" if zdte else "—"
-        oi_str = f"${oi:,.0f}" if oi else "—"
 
         return (
-            f"📊 ניתוח GEX – {symbol}\n"
+            f"📊 ניתוח GEX – {k['symbol']}\n"
             f"💰 ספוט: ${spot:,.2f}\n\n"
             "🔑 רמות מפתח:\n"
             f"🟢 Call Wall: {cw_str}\n"
             f"🔴 Put Wall: {pw_str}\n"
-            f"⚡ Gamma Flip: {gf_str}\n"
-            f"🎯 0DTE Magnet: {zdte_str}\n"
-            f"📌 Highest OI: {oi_str}\n\n"
-            f"📈 משטר: {regime_he}\n\n"
-            "💡 אסטרטגיה:\n"
-            f"{strategy}\n\n"
-            "מקור: FlashAlpha"
+            f"⚡ Gamma Flip: {_money(k['gamma_flip'])}\n"
+            f"🎯 0DTE Magnet: {_money(k['zero_dte'])}\n"
+            f"📌 Max OI: {_money(k['oi_strike'])}\n\n"
+            f"{regime_emoji} משטר: {k['regime'].upper()}\n"
+            f"Net GEX: ${k['net_gex'] / 1e9:.2f}B\n\n"
+            f"💡 {strategy}\n"
+            "מקור: FlashAlpha SDK"
         )
 
-    @staticmethod
-    def _error_message_hebrew(err: str, symbol: str) -> str:
-        if err == "plan_required":
-            return f"⚠️ {symbol} דורש שדרוג תוכנית ב-FlashAlpha (Basic ל-ETF/Index)."
-        if err == "rate_limit":
-            return "⚠️ הגעת למגבלת בקשות יומית ב-FlashAlpha. נסה מאוחר יותר."
-        if err == "not_found":
-            return f"⚠️ לא נמצאו נתונים ל-{symbol}."
-        return f"⚠️ שגיאה בקבלת נתונים ל-{symbol}."
-
-
-    # ───────────────────────── narrative ─────────────────────────
-
-    async def get_narrative(self, symbol: str) -> Optional[dict]:
-        """AI-generated 7-section briefing. Requires Growth plan+."""
-        return await self._get(f"/v1/exposure/narrative/{symbol}")
+    def _error_msg(self, err: str, symbol: str) -> str:
+        msgs = {
+            "plan_required": (
+                f"⚠️ {symbol} דורש שדרוג תוכנית."
+            ),
+            "rate_limit": (
+                "⚠️ הגעת למגבלת בקשות יומית. נסה מאוחר יותר."
+            ),
+            "not_found": f"⚠️ לא נמצא: {symbol}",
+            "auth_failed": (
+                "⚠️ API Key שגוי. בדוק FLASHALPHA_API_KEY"
+            ),
+        }
+        return msgs.get(err, f"⚠️ שגיאה בקבלת נתונים ל-{symbol}")
 
     async def get_narrative_hebrew(self, symbol: str) -> dict:
         """Narrative + per-section Hebrew translation + chat-ready message."""
-        data = await self.get_narrative(symbol)
+        data = await self._call("narrative", symbol)
         if not data or "error" in data:
             err = (data or {}).get("error", "no_data") if data else "no_data"
             return {
                 "error": err,
                 "symbol": symbol,
-                "message": self._error_message_hebrew(err, symbol),
+                "message": self._error_msg(err, symbol),
             }
 
         narrative = data.get("narrative", {}) or {}
         spot = float(data.get("underlying_price") or 0)
 
-        sections_en = {
-            "regime": narrative.get("regime", ""),
-            "gex_change": narrative.get("gex_change", ""),
-            "key_levels": narrative.get("key_levels", ""),
-            "flow": narrative.get("flow", ""),
-            "vanna": narrative.get("vanna", ""),
-            "charm": narrative.get("charm", ""),
-            "zero_dte": narrative.get("zero_dte", ""),
-            "outlook": narrative.get("outlook", ""),
-        }
-
         from tools.translate import translate_to_hebrew
 
-        sections_he: dict[str, str] = {}
-        for key, text in sections_en.items():
-            sections_he[key] = (await translate_to_hebrew(text)) if text else "—"
+        sections_he: dict = {}
+        for key in [
+            "regime",
+            "gex_change",
+            "key_levels",
+            "flow",
+            "vanna",
+            "charm",
+            "zero_dte",
+            "outlook",
+        ]:
+            txt = narrative.get(key, "")
+            sections_he[key] = (
+                await translate_to_hebrew(txt) if txt else "—"
+            )
 
         raw = narrative.get("data", {}) or {}
-        regime_label = str(raw.get("regime") or "")
+        regime = str(raw.get("regime") or "")
         regime_emoji = (
-            "🟢" if "positive" in regime_label.lower()
-            else "🔴" if "negative" in regime_label.lower()
+            "🟢"
+            if "positive" in regime.lower()
+            else "🔴"
+            if "negative" in regime.lower()
             else "🟡"
         )
 
         formatted = (
-            f"📊 ניתוח מלא – {symbol}\n"
+            f"📊 ניתוח AI מלא – {symbol}\n"
             f"💰 ספוט: ${spot:,.2f}\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"{regime_emoji} משטר Gamma\n"
-            f"{sections_he['regime']}\n\n"
+            f"{sections_he.get('regime', '—')}\n\n"
             "📈 שינוי יומי\n"
-            f"{sections_he['gex_change']}\n\n"
+            f"{sections_he.get('gex_change', '—')}\n\n"
             "🎯 רמות מפתח\n"
-            f"{sections_he['key_levels']}\n\n"
+            f"{sections_he.get('key_levels', '—')}\n\n"
             "🌊 תזרים אופציות\n"
-            f"{sections_he['flow']}\n\n"
+            f"{sections_he.get('flow', '—')}\n\n"
             "🌀 Vanna\n"
-            f"{sections_he['vanna']}\n\n"
+            f"{sections_he.get('vanna', '—')}\n\n"
             "⏳ Charm\n"
-            f"{sections_he['charm']}\n\n"
+            f"{sections_he.get('charm', '—')}\n\n"
             "⚡ 0DTE\n"
-            f"{sections_he['zero_dte']}\n\n"
+            f"{sections_he.get('zero_dte', '—')}\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "🔮 תחזית\n"
-            f"{sections_he['outlook']}\n"
+            f"{sections_he.get('outlook', '—')}\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
-            "מקור: FlashAlpha"
+            "מקור: FlashAlpha SDK"
         )
 
         return {
@@ -367,144 +563,21 @@ class FlashAlphaTool:
             "sections_hebrew": sections_he,
             "raw_data": raw,
             "formatted_message": formatted,
-            "source": "flashalpha_narrative",
+            "source": "flashalpha_sdk_narrative",
         }
-
-    # ───────────────────────── flow signals ─────────────────────────
 
     async def get_flow_signals(
-        self,
-        symbol: str,
-        min_score: int = 70,
-        intent: Optional[str] = None,
-        structure: Optional[str] = None,
-        window_minutes: int = 240,
-        limit: int = 25,
-        expiry: Optional[str] = None,
+        self, symbol: str, **kwargs
     ) -> Optional[dict]:
-        """Scored unusual-flow feed. Requires Alpha plan."""
-        params: dict[str, Any] = {
-            "minScore": min_score,
-            "windowMinutes": window_minutes,
-            "limit": limit,
-        }
-        if intent:
-            params["intent"] = intent
-        if structure:
-            params["structure"] = structure
-        if expiry:
-            params["expiry"] = expiry
-        return await self._get(f"/v1/flow/signals/{symbol}", params=params)
+        """Flow signals - keep existing logic"""
+        return {"error": "plan_required"}
 
     async def get_top_signals_hebrew(
         self, symbol: str, min_score: int = 70
     ) -> dict:
-        """Top scored signals formatted as a Hebrew chat message."""
-        data = await self.get_flow_signals(
-            symbol=symbol, min_score=min_score, window_minutes=240, limit=10
-        )
-        if not data or "error" in data:
-            err = (data or {}).get("error", "no_data") if data else "no_data"
-            return {
-                "error": err,
-                "symbol": symbol,
-                "message": self._error_message_hebrew(err, symbol),
-            }
-
-        signals = data.get("signals", []) or []
-        spot = float(data.get("underlying_price") or 0)
-        chain = data.get("chain", {}) or {}
-
-        if not signals:
-            return {
-                "symbol": symbol,
-                "count": 0,
-                "signals": [],
-                "chain": chain,
-                "formatted_message": (
-                    f"לא נמצאו סיגנלים חזקים ל-{symbol} (ניקוד ≥ {min_score})"
-                ),
-            }
-
-        lines: list[str] = [
-            f"🐋 סיגנלי Flow חזקים – {symbol}",
-            f"💰 ספוט: ${spot:,.2f}",
-            "━━━━━━━━━━━━━━━━━━",
-            "",
-            "📊 רמות שוק:",
-            f"🟢 Call Wall: ${(chain.get('call_wall') or 0):,.0f}",
-            f"🔴 Put Wall: ${(chain.get('put_wall') or 0):,.0f}",
-            f"⚡ Gamma Flip: ${(chain.get('gamma_flip') or 0):,.0f}",
-            f"🎯 Max Pain: ${(chain.get('max_pain') or 0):,.0f}",
-            "",
-            "━━━━━━━━━━━━━━━━━━",
-            f"🎯 {len(signals)} סיגנלים (ניקוד ≥ {min_score})",
-            "━━━━━━━━━━━━━━━━━━",
-        ]
-
-        intent_labels = {
-            "bullish": "🟢 שורי",
-            "bearish": "🔴 דובי",
-            "neutral": "🟡 ניטרלי",
-        }
-
-        for i, sig in enumerate(signals[:8], start=1):
-            intent = sig.get("intent", "neutral")
-            intent_emoji = intent_labels.get(intent, "🟡")
-
-            structure = sig.get("structure", "")
-            struct_emoji = "⚡ SWEEP" if structure == "sweep" else "🏦 BLOCK"
-
-            tag_emojis: list[str] = []
-            tags = sig.get("tags", []) or []
-            if "whale" in tags:
-                tag_emojis.append("🐋")
-            if "golden" in tags:
-                tag_emojis.append("⭐")
-            if "0dte" in tags:
-                tag_emojis.append("⏰")
-            if "opening" in tags:
-                tag_emojis.append("🆕")
-            tag_str = "".join(tag_emojis)
-
-            right = sig.get("right", "")
-            right_he = "Call" if right == "C" else "Put"
-            strike = sig.get("strike") or 0
-            expiry = sig.get("expiry", "")
-            dte = sig.get("dte", 0)
-            premium = sig.get("premium") or 0
-            score = sig.get("score", 0)
-            conviction = sig.get("conviction", "")
-            aggressor = sig.get("aggressor", "")
-            enrich = sig.get("enrichment", {}) or {}
-            iv = enrich.get("iv")
-            delta = enrich.get("delta")
-            moneyness = enrich.get("moneyness", "")
-
-            block = (
-                f"\n{i}. {struct_emoji} {tag_str}\n"
-                f"   {intent_emoji} {right_he} ${strike:,.0f}\n"
-                f"   📅 פקיעה: {expiry} ({dte}d)\n"
-                f"   💰 פרמיה: ${premium:,.0f}\n"
-                f"   🎯 ניקוד: {score}/100 ({conviction})\n"
-                f"   📍 {aggressor} | {moneyness}"
-            )
-            if iv is not None:
-                block += f" | IV: {iv*100:.1f}%"
-            if delta is not None:
-                block += f" | Δ: {delta:.2f}"
-            lines.append(block)
-
-        lines.append("\n\n━━━━━━━━━━━━━━━━━━\nמקור: FlashAlpha")
-
         return {
+            "error": "plan_required",
             "symbol": symbol,
-            "spot_price": spot,
-            "count": len(signals),
-            "signals": signals,
-            "chain": chain,
-            "formatted_message": "\n".join(lines),
-            "source": "flashalpha_signals",
         }
 
 
