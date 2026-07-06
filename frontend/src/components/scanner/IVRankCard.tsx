@@ -3,7 +3,7 @@ import type { IVRankResult } from "../../types";
 function barColor(rank: number) {
   if (rank > 80) return "bg-rose-500";
   if (rank > 50) return "bg-amber-500";
-  if (rank < 25) return "bg-blue-500";
+  if (rank < 25) return "bg-indigo-500";
   return "bg-slate-500";
 }
 
@@ -23,7 +23,7 @@ function signalAccent(signal: IVRankResult["signal"]) {
     case "SELL":
       return "bg-rose-500/20 text-rose-200";
     case "BUY":
-      return "bg-blue-500/20 text-blue-200";
+      return "bg-indigo-500/20 text-indigo-200";
     default:
       return "bg-slate-700 text-slate-200";
   }
@@ -35,7 +35,7 @@ export default function IVRankCard({ result }: { result: IVRankResult }) {
   const strategies = result.recommended_strategies ?? [];
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/70 p-3 shadow-md lg:gap-3 lg:p-4">
+    <div className="card card-hover flex flex-col gap-2 p-3 lg:gap-3 lg:p-4">
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-lg font-bold lg:text-2xl">
           {result.ticker}

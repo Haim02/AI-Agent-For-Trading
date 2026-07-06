@@ -18,7 +18,6 @@ import time
 import asyncio
 import logging
 from typing import Optional
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import pytz
@@ -31,10 +30,10 @@ _CACHE: dict = {}
 _CACHE_TTL = 3600  # seconds
 
 
-def _cache_get(key: str) -> Optional[dict]:
+def _cache_get(key: str, ttl: int = _CACHE_TTL) -> Optional[dict]:
     if key in _CACHE:
         data, ts = _CACHE[key]
-        if time.time() - ts < _CACHE_TTL:
+        if time.time() - ts < ttl:
             logger.debug(f"Cache HIT: {key[:60]}")
             return data
         del _CACHE[key]
@@ -71,19 +70,11 @@ class FlashAlphaTool:
         return self._fa
 
     async def _run(self, func, *args, **kwargs):
-        """
-        Run sync SDK call in thread pool.
-        Handles errors uniformly.
-        """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            return await asyncio.wait_for(
-                loop.run_in_executor(
-                    ex,
-                    lambda: func(*args, **kwargs),
-                ),
-                timeout=20.0,
-            )
+        """Run a sync SDK call off the event loop with a hard timeout."""
+        return await asyncio.wait_for(
+            asyncio.to_thread(func, *args, **kwargs),
+            timeout=20.0,
+        )
 
     async def _call(
         self,
@@ -100,7 +91,7 @@ class FlashAlphaTool:
             return None
 
         cache_key = _make_key(method_name, *args, **kwargs)
-        cached = _cache_get(cache_key)
+        cached = _cache_get(cache_key, ttl=cache_ttl)
         if cached is not None:
             return cached
 
@@ -567,18 +558,36 @@ class FlashAlphaTool:
         }
 
     async def get_flow_signals(
-        self, symbol: str, **kwargs
+        self,
+        symbol: str,
+        min_score: int = 0,
+        structure: Optional[str] = None,
+        window_minutes: int = 240,
+        limit: int = 50,
     ) -> Optional[dict]:
-        """Flow signals - keep existing logic"""
-        return {"error": "plan_required"}
+        """Flow signals.
+
+        The FlashAlpha flow endpoint requires the Alpha plan; until then we
+        build equivalent signals from yfinance unusual-options activity so the
+        Telegram commands and scheduler jobs stay functional.
+        """
+        from services.flow_signals import get_unusual_options_signals
+
+        return await get_unusual_options_signals(
+            symbol, min_score=min_score, structure=structure, limit=limit
+        )
 
     async def get_top_signals_hebrew(
         self, symbol: str, min_score: int = 70
     ) -> dict:
-        return {
-            "error": "plan_required",
-            "symbol": symbol,
-        }
+        from services.flow_signals import (
+            format_signals_hebrew,
+            get_unusual_options_signals,
+        )
+
+        payload = await get_unusual_options_signals(symbol, min_score=min_score, limit=8)
+        payload["formatted_message"] = format_signals_hebrew(payload, symbol)
+        return payload
 
 
 __all__ = ["FlashAlphaTool"]

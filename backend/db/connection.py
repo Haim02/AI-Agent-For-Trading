@@ -15,7 +15,10 @@ def _connect() -> AsyncIOMotorDatabase:
     if _db is not None:
         return _db
 
-    mongo_url = os.getenv("MONGO_URL", "mongodb+srv://hhaim12_db_user:951753@cluster0.dvk1ryt.mongodb.net/")
+    mongo_url = os.getenv("MONGO_URL")
+    if not mongo_url:
+        logger.warning("MONGO_URL is not set – falling back to local MongoDB (mongodb://localhost:27017)")
+        mongo_url = "mongodb://localhost:27017"
     mongo_db = os.getenv("MONGO_DB", "options_agent")
 
     _client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)

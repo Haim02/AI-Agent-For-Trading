@@ -65,7 +65,7 @@ export default function JournalCalendar({
   );
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 shadow-lg lg:p-4">
+    <div className="card p-3 lg:p-4">
       <div className="mb-3 flex items-center justify-between">
         <button
           type="button"
@@ -121,7 +121,7 @@ export default function JournalCalendar({
               onClick={() => onSelect(cell.date, cell.entry)}
               className={`flex h-10 flex-col items-center justify-center rounded-md border text-xs transition lg:h-16 ${
                 isSelected
-                  ? "border-blue-500 bg-blue-500/10"
+                  ? "border-indigo-400 bg-indigo-500/10"
                   : "border-slate-800 bg-slate-950/40 hover:border-slate-600"
               }`}
             >

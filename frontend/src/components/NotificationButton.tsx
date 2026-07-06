@@ -21,7 +21,7 @@ export default function NotificationButton() {
     <button
       type="button"
       onClick={requestPermission}
-      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+      className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
     >
       <Bell size={16} />
       <span className="hidden sm:inline">הפעל התראות</span>

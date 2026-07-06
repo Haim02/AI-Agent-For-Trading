@@ -564,6 +564,7 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
 
         candles: list[dict[str, Any]] = []
         spot: float = 0.0
+        synthetic_candles = False
 
         async def fetch_yahoo_v8(symbol: str) -> list[dict[str, Any]]:
             """Pure-HTTP Yahoo Finance Chart API v8 fetch (no yfinance pkg)."""
@@ -737,6 +738,7 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
             logger.warning(
                 "Using synthetic candles for %s, spot=%s", ticker, spot
             )
+            synthetic_candles = True
 
             import random as _random
 
@@ -997,11 +999,16 @@ async def gex_levels_chart(ticker: str = "SPX") -> dict[str, Any]:
                 "change": round(day_change, 2),
                 "change_pct": round(day_change_pct, 2),
                 "is_market_open": is_market_open,
-                "session_label": "פתוח" if is_market_open else "סגור",
+                "session_label": (
+                    "⚠️ סימולציה – אין נתונים חיים"
+                    if synthetic_candles
+                    else "פתוח" if is_market_open else "סגור"
+                ),
                 "candle_count": len(candles),
                 "interval": "5m",
                 "timeframe": "0DTE – יום נוכחי",
             },
+            "synthetic_candles": synthetic_candles,
             "timestamp": datetime.utcnow().isoformat(),
         }
         _set_candle_cache(ticker, result_dict)
@@ -1571,166 +1578,10 @@ async def fa_signals_raw(
             return result
     except Exception:  # noqa: BLE001
         logger.exception("fa_signals_raw: FlashAlpha path failed")
-    return await _get_yfinance_unusual_options(ticker, min_score, structure)
-
-
-async def _get_yfinance_unusual_options(
-    ticker: str, min_score: int = 0, structure_filter: Optional[str] = None
-) -> dict[str, Any]:
-    """Unusual options activity assembled from yfinance chains + a simple 0-100 score."""
-    import pytz as _pytz
-
-    israel_tz = _pytz.timezone("Asia/Jerusalem")
-
-    def _fetch() -> tuple[float, list[dict[str, Any]]]:
-        try:
-            import yfinance as yf
-            t = yf.Ticker(ticker)
-            spot_hist = t.history(period="1d")
-            if spot_hist.empty:
-                return 0.0, []
-            spot = float(spot_hist["Close"].iloc[-1])
-
-            expirations = (t.options or [])[:3]
-            if not expirations:
-                return spot, []
-
-            all_options: list[dict[str, Any]] = []
-            for exp in expirations:
-                try:
-                    chain = t.option_chain(exp)
-                except Exception:  # noqa: BLE001
-                    continue
-
-                try:
-                    exp_dt = datetime.strptime(exp, "%Y-%m-%d")
-                    dte = (exp_dt - datetime.now()).days
-                except Exception:  # noqa: BLE001
-                    dte = 0
-
-                def _row_to_signal(row, right: str) -> Optional[dict[str, Any]]:
-                    try:
-                        vol = int(row.get("volume", 0) or 0)
-                        oi = int(row.get("openInterest", 1) or 1)
-                        strike = float(row["strike"])
-                        price = float(row.get("lastPrice", 0) or 0)
-                        if vol < 10 or price < 0.05:
-                            return None
-                        premium = price * vol * 100
-                        vol_oi = vol / max(oi, 1)
-                        dist = abs(strike - spot) / spot if spot else 0
-                        if right == "C":
-                            moneyness = (
-                                "ITM" if strike < spot
-                                else "ATM" if dist < 0.01
-                                else "OTM"
-                            )
-                            intent = "bullish"
-                            default_delta = 0.3
-                        else:
-                            moneyness = (
-                                "ITM" if strike > spot
-                                else "ATM" if dist < 0.01
-                                else "OTM"
-                            )
-                            intent = "bearish"
-                            default_delta = -0.3
-                        score = min(
-                            100,
-                            int(
-                                (min(vol_oi, 5) / 5) * 40
-                                + min(premium / 500_000, 1) * 35
-                                + (1 - min(dist, 0.1) / 0.1) * 15
-                                + (1 - min(dte, 30) / 30) * 10
-                            ),
-                        )
-                        tags: list[str] = []
-                        if premium > 1_000_000:
-                            tags.append("whale")
-                        if vol_oi > 1:
-                            tags.append("opening")
-                        if dte == 0:
-                            tags.append("0dte")
-                        return {
-                            "ts": datetime.now(israel_tz).isoformat(),
-                            "expiry": exp,
-                            "strike": strike,
-                            "right": right,
-                            "side": "buy",
-                            "price": round(price, 2),
-                            "size": vol,
-                            "premium": round(premium),
-                            "dte": dte,
-                            "structure": "sweep" if vol_oi > 2 else "block",
-                            "aggressor": "above_ask" if vol_oi > 3 else "at_ask",
-                            "intent": intent,
-                            "score": score,
-                            "conviction": (
-                                "high" if score >= 75
-                                else "medium" if score >= 50
-                                else "low"
-                            ),
-                            "tags": tags,
-                            "enrichment": {
-                                "iv": float(row.get("impliedVolatility", 0.3) or 0.3),
-                                "delta": float(row.get("delta", default_delta) or default_delta),
-                                "moneyness": moneyness,
-                            },
-                        }
-                    except Exception:  # noqa: BLE001
-                        return None
-
-                for _, row in chain.calls.iterrows():
-                    sig = _row_to_signal(row, "C")
-                    if sig is not None:
-                        all_options.append(sig)
-                for _, row in chain.puts.iterrows():
-                    sig = _row_to_signal(row, "P")
-                    if sig is not None:
-                        all_options.append(sig)
-
-            all_options.sort(key=lambda x: x["score"], reverse=True)
-            return spot, all_options[:50]
-        except Exception as exc:  # noqa: BLE001
-            logger.error("yfinance options error: %s", exc)
-            return 0.0, []
-
-    try:
-        spot, signals = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=30.0)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Options fetch timeout: %s", exc)
-        spot, signals = 0.0, []
-
-    if min_score > 0:
-        signals = [s for s in signals if s["score"] >= min_score]
-    if structure_filter:
-        signals = [s for s in signals if s["structure"] == structure_filter]
-
-    chain: dict[str, Any] = {}
-    try:
-        from tools.flashalpha_tool import FlashAlphaTool
-        levels = await FlashAlphaTool().get_levels(ticker)
-        if levels and "levels" in levels:
-            lv = levels["levels"]
-            chain = {
-                "call_wall": lv.get("call_wall"),
-                "put_wall": lv.get("put_wall"),
-                "gamma_flip": lv.get("gamma_flip"),
-                "max_pain": lv.get("highest_oi_strike"),
-            }
-    except Exception:  # noqa: BLE001
-        pass
-
-    return {
-        "symbol": ticker,
-        "underlying_price": spot,
-        "window_minutes": 240,
-        "expiry": None,
-        "chain": chain,
-        "count": len(signals),
-        "signals": signals,
-        "source": "yfinance_unusual_options",
-    }
+    from services.flow_signals import get_unusual_options_signals
+    return await get_unusual_options_signals(
+        ticker, min_score=min_score, structure=structure, limit=limit
+    )
 
 
 @router.get("/flashalpha/signals/{ticker}")

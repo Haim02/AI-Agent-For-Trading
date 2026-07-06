@@ -43,7 +43,7 @@ export default function Journal() {
         }}
       />
 
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-lg">
+      <div className="card p-5">
         <h2 className="mb-3 text-sm font-semibold">
           {selectedEntry ? `פרטים – ${selectedEntry.date}` : "בחר יום מהיומן"}
         </h2>

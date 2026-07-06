@@ -117,7 +117,7 @@ function PositionCard({
   const dteLeft = Math.max(0, (pos.dte ?? 0) - elapsed);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-gray-800 bg-gray-900">
+    <div className="card overflow-hidden">
       <div className="flex items-center justify-between px-4 pt-4 pb-3">
         <div className="flex items-center gap-3">
           <div className="h-10 w-2 flex-none rounded-full" style={{ backgroundColor: color }} />
@@ -131,10 +131,10 @@ function PositionCard({
                 {label}
               </span>
             </div>
-            <div className="mt-0.5 text-xs text-gray-500">
+            <div className="mt-0.5 text-xs text-slate-500">
               {new Date(pos.entry_date).toLocaleDateString("he-IL")}
               {" · "}
-              <span className={dteLeft <= 7 ? "text-orange-400" : "text-gray-500"}>
+              <span className={dteLeft <= 7 ? "text-orange-400" : "text-slate-500"}>
                 {dteLeft} DTE
               </span>
             </div>
@@ -153,15 +153,15 @@ function PositionCard({
       </div>
 
       <div className="px-4 pb-3">
-        <div className="mb-1 flex justify-between text-xs text-gray-600">
+        <div className="mb-1 flex justify-between text-xs text-slate-600">
           <span>0%</span>
           <span className="text-yellow-500">יעד 50%</span>
           <span className="text-red-500">Stop 200%</span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-gray-800">
+        <div className="h-2 overflow-hidden rounded-full bg-slate-800">
           <div
             className={`h-full rounded-full transition-all duration-500 ${
-              pnlPct >= 50 ? "bg-green-500" : pnlPct < -100 ? "bg-red-500" : "bg-blue-500"
+              pnlPct >= 50 ? "bg-green-500" : pnlPct < -100 ? "bg-red-500" : "bg-indigo-500"
             }`}
             style={{ width: `${Math.min(100, Math.abs(pnlPct) / 2)}%` }}
           />
@@ -173,8 +173,8 @@ function PositionCard({
           {Object.entries(pos.strikes)
             .filter(([k]) => !["type", "width", "call_width", "put_width"].includes(k))
             .map(([k, v]) => (
-              <div key={k} className="rounded-lg bg-gray-800 px-2 py-1 font-mono text-xs">
-                <span className="text-gray-500">{k}: </span>
+              <div key={k} className="rounded-lg bg-slate-800 px-2 py-1 font-mono text-xs">
+                <span className="text-slate-500">{k}: </span>
                 <span className="font-bold text-white">${v}</span>
               </div>
             ))}
@@ -182,18 +182,18 @@ function PositionCard({
       )}
 
       <div className="grid grid-cols-3 gap-2 px-4 pb-3 text-xs">
-        <div className="rounded-lg bg-gray-800 p-2">
-          <div className="mb-0.5 text-gray-500">Credit</div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-0.5 text-slate-500">Credit</div>
           <div className="font-mono font-bold text-white">${(pos.entry_credit ?? 0).toFixed(0)}</div>
         </div>
-        <div className="rounded-lg bg-gray-800 p-2">
-          <div className="mb-0.5 text-gray-500">יעד</div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-0.5 text-slate-500">יעד</div>
           <div className="font-mono font-bold text-green-400">
             ${(pos.profit_target ?? 0).toFixed(0)}
           </div>
         </div>
-        <div className="rounded-lg bg-gray-800 p-2">
-          <div className="mb-0.5 text-gray-500">Stop</div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-0.5 text-slate-500">Stop</div>
           <div className="font-mono font-bold text-red-400">
             ${(pos.stop_loss ?? 0).toFixed(0)}
           </div>
@@ -202,29 +202,29 @@ function PositionCard({
 
       {pos.notes && (
         <div className="px-4 pb-3">
-          <div className="rounded-lg bg-gray-800 px-3 py-2 text-xs italic text-gray-400">
+          <div className="rounded-lg bg-slate-800 px-3 py-2 text-xs italic text-slate-400">
             {pos.notes}
           </div>
         </div>
       )}
 
-      <div className="border-t border-gray-800 px-4 py-3">
+      <div className="border-t border-slate-800 px-4 py-3">
         {!showClose ? (
           <button
             onClick={() => setShowClose(true)}
-            className="w-full rounded-xl bg-gray-800 py-2.5 text-sm font-semibold text-gray-300 transition-colors hover:bg-gray-700 active:bg-gray-600"
+            className="w-full rounded-xl bg-slate-800 py-2.5 text-sm font-semibold text-slate-300 transition-colors hover:bg-slate-700 active:bg-slate-600"
           >
             סגור פוזיציה
           </button>
         ) : (
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <span className="flex-none text-xs text-gray-400">P&L סופי:</span>
+              <span className="flex-none text-xs text-slate-400">P&L סופי:</span>
               <input
                 type="number"
                 value={closePnl}
                 onChange={(e) => setClosePnl(e.target.value)}
-                className="flex-1 rounded-lg border border-gray-700 bg-gray-800 px-3 py-1.5 font-mono text-sm text-white outline-none focus:border-blue-500"
+                className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 font-mono text-sm text-white outline-none focus:border-indigo-400"
               />
             </div>
             <div className="flex gap-2">
@@ -233,13 +233,13 @@ function PositionCard({
                   onClose(pos._id, parseFloat(closePnl) || 0);
                   setShowClose(false);
                 }}
-                className="flex-1 rounded-xl bg-blue-600 py-2 text-sm font-semibold text-white"
+                className="flex-1 rounded-xl bg-indigo-600 py-2 text-sm font-semibold text-white"
               >
                 אשר סגירה
               </button>
               <button
                 onClick={() => setShowClose(false)}
-                className="flex-1 rounded-xl bg-gray-800 py-2 text-sm text-gray-400"
+                className="flex-1 rounded-xl bg-slate-800 py-2 text-sm text-slate-400"
               >
                 ביטול
               </button>
@@ -295,35 +295,35 @@ function AddPositionModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-3xl border-t border-gray-700 bg-gray-900 pb-8">
+      <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-3xl border-t border-slate-700 bg-slate-900 pb-8">
         <div className="flex justify-center pt-3 pb-4">
-          <div className="h-1 w-12 rounded-full bg-gray-700" />
+          <div className="h-1 w-12 rounded-full bg-slate-700" />
         </div>
 
         <div className="space-y-4 px-5">
           <h2 className="text-lg font-bold text-white">הוסף פוזיציה חדשה</h2>
 
           <div>
-            <label className="mb-1.5 block text-xs text-gray-400">Ticker</label>
+            <label className="mb-1.5 block text-xs text-slate-400">Ticker</label>
             <input
               value={form.ticker}
               onChange={(e) =>
                 setForm((f) => ({ ...f, ticker: e.target.value.toUpperCase() }))
               }
-              className="w-full rounded-xl border border-gray-700 bg-gray-800 px-4 py-3 font-mono text-white outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 font-mono text-white outline-none focus:border-indigo-400"
               placeholder="SPY"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs text-gray-400">אסטרטגיה</label>
+            <label className="mb-1.5 block text-xs text-slate-400">אסטרטגיה</label>
             <div className="grid grid-cols-2 gap-2">
               {STRATEGIES.map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => setForm((f) => ({ ...f, strategy: key }))}
                   className={`rounded-xl px-3 py-2.5 text-right text-sm font-medium transition-all ${
-                    form.strategy === key ? "border text-white" : "bg-gray-800 text-gray-400"
+                    form.strategy === key ? "border text-white" : "bg-slate-800 text-slate-400"
                   }`}
                   style={
                     form.strategy === key
@@ -342,15 +342,15 @@ function AddPositionModal({
 
           {fields.length > 0 && (
             <div>
-              <label className="mb-1.5 block text-xs text-gray-400">Strikes</label>
+              <label className="mb-1.5 block text-xs text-slate-400">Strikes</label>
               <div className="grid grid-cols-2 gap-2">
                 {fields.map((f) => (
                   <div key={f}>
-                    <div className="mb-1 text-xs text-gray-500">{f}</div>
+                    <div className="mb-1 text-xs text-slate-500">{f}</div>
                     <input
                       type="number"
                       onChange={(e) => updateStrike(f, e.target.value)}
-                      className="w-full rounded-xl border border-gray-700 bg-gray-800 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-blue-500"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-indigo-400"
                       placeholder="0"
                     />
                   </div>
@@ -361,7 +361,7 @@ function AddPositionModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1.5 block text-xs text-gray-400">Credit ($)</label>
+              <label className="mb-1.5 block text-xs text-slate-400">Credit ($)</label>
               <input
                 type="number"
                 value={form.entry_credit || ""}
@@ -371,37 +371,37 @@ function AddPositionModal({
                     entry_credit: parseFloat(e.target.value) || 0,
                   }))
                 }
-                className="w-full rounded-xl border border-gray-700 bg-gray-800 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-blue-500"
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-indigo-400"
                 placeholder="150"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs text-gray-400">DTE</label>
+              <label className="mb-1.5 block text-xs text-slate-400">DTE</label>
               <input
                 type="number"
                 value={form.dte}
                 onChange={(e) =>
                   setForm((f) => ({ ...f, dte: parseInt(e.target.value) || 45 }))
                 }
-                className="w-full rounded-xl border border-gray-700 bg-gray-800 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-blue-500"
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-indigo-400"
               />
             </div>
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs text-gray-400">הערות (אופציונלי)</label>
+            <label className="mb-1.5 block text-xs text-slate-400">הערות (אופציונלי)</label>
             <textarea
               value={form.notes}
               onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
               rows={2}
-              className="w-full resize-none rounded-xl border border-gray-700 bg-gray-800 px-4 py-3 text-sm text-white outline-none focus:border-blue-500"
+              className="w-full resize-none rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-indigo-400"
               placeholder="סיבת הכניסה, GEX Regime..."
             />
           </div>
 
           <button
             onClick={() => onAdd(form)}
-            className="w-full rounded-2xl bg-blue-600 py-4 text-base font-bold text-white transition-colors active:bg-blue-700"
+            className="w-full rounded-2xl bg-indigo-600 py-4 text-base font-bold text-white transition-colors active:bg-blue-700"
           >
             הוסף פוזיציה
           </button>
@@ -419,11 +419,11 @@ function SummaryBar({ positions }: { positions: Position[] }) {
 
   return (
     <div className="grid grid-cols-3 gap-3 px-4 pb-4">
-      <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 text-center">
+      <div className="card p-3 text-center">
         <div className="text-2xl font-bold text-white">{open.length}</div>
-        <div className="mt-0.5 text-xs text-gray-500">פוזיציות פתוחות</div>
+        <div className="mt-0.5 text-xs text-slate-500">פוזיציות פתוחות</div>
       </div>
-      <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 text-center">
+      <div className="card p-3 text-center">
         <div
           className={`font-mono text-2xl font-bold ${
             totalPnl >= 0 ? "text-green-400" : "text-red-400"
@@ -431,9 +431,9 @@ function SummaryBar({ positions }: { positions: Position[] }) {
         >
           {totalPnl >= 0 ? "+" : "-"}${Math.abs(totalPnl).toFixed(0)}
         </div>
-        <div className="mt-0.5 text-xs text-gray-500">P&L כולל</div>
+        <div className="mt-0.5 text-xs text-slate-500">P&L כולל</div>
       </div>
-      <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 text-center">
+      <div className="card p-3 text-center">
         <div
           className={`text-2xl font-bold ${
             winRate >= 60 ? "text-green-400" : "text-yellow-400"
@@ -441,7 +441,7 @@ function SummaryBar({ positions }: { positions: Position[] }) {
         >
           {winRate}%
         </div>
-        <div className="mt-0.5 text-xs text-gray-500">Win Rate</div>
+        <div className="mt-0.5 text-xs text-slate-500">Win Rate</div>
       </div>
     </div>
   );
@@ -474,12 +474,12 @@ export default function Positions() {
   const positions: Position[] = data?.positions ?? [];
 
   return (
-    <div className="min-h-screen bg-gray-950 pb-24 text-white">
+    <div className="min-h-screen bg-slate-950 pb-24 text-white">
       <div className="flex items-center justify-between px-4 pt-5 pb-4">
         <h1 className="text-2xl font-bold">פוזיציות</h1>
         <button
           onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
+          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
         >
           + הוסף
         </button>
@@ -487,13 +487,13 @@ export default function Positions() {
 
       {tab === "open" && positions.length > 0 && <SummaryBar positions={positions} />}
 
-      <div className="mx-4 mb-4 flex gap-1 rounded-xl bg-gray-900 p-1">
+      <div className="mx-4 mb-4 flex gap-1 rounded-xl bg-slate-900 p-1">
         {(["open", "closed"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`flex-1 rounded-lg py-2 text-sm font-semibold transition-all ${
-              tab === t ? "bg-gray-700 text-white" : "text-gray-500"
+              tab === t ? "bg-slate-700 text-white" : "text-slate-500"
             }`}
           >
             {t === "open" ? "פתוחות" : "סגורות"}
@@ -502,18 +502,18 @@ export default function Positions() {
       </div>
 
       <div className="space-y-4 px-4">
-        {isLoading && <div className="py-12 text-center text-gray-500">טוען...</div>}
+        {isLoading && <div className="py-12 text-center text-slate-500">טוען...</div>}
 
         {!isLoading && positions.length === 0 && (
           <div className="py-16 text-center">
             <div className="mb-4 text-5xl">📭</div>
-            <div className="text-gray-400">
+            <div className="text-slate-400">
               {tab === "open" ? "אין פוזיציות פתוחות" : "אין פוזיציות סגורות"}
             </div>
             {tab === "open" && (
               <button
                 onClick={() => setShowAdd(true)}
-                className="mt-4 rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white"
+                className="mt-4 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white"
               >
                 הוסף פוזיציה ראשונה
               </button>

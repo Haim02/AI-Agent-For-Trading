@@ -26,7 +26,7 @@ export default function ScanResults({ data, isLoading }: Props) {
 
   if (!data) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-6 text-sm text-slate-400">
+      <div className="card p-6 text-sm text-slate-400">
         לחץ "סרוק עכשיו" כדי להתחיל סריקה.
       </div>
     );
@@ -41,14 +41,14 @@ export default function ScanResults({ data, isLoading }: Props) {
   return (
     <Tabs.Root
       defaultValue="golden"
-      className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 shadow-lg lg:p-4"
+      className="card p-3 lg:p-4"
     >
       <Tabs.List className="scrollbar-hide mb-4 flex gap-2 overflow-x-auto border-b border-slate-700 pb-2">
         {TABS.map((tab) => (
           <Tabs.Trigger
             key={tab.value}
             value={tab.value}
-            className="shrink-0 whitespace-nowrap rounded-md px-3 py-1 text-xs text-slate-300 hover:bg-slate-800 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
+            className="shrink-0 whitespace-nowrap rounded-md px-3 py-1 text-xs text-slate-300 hover:bg-slate-800 data-[state=active]:bg-indigo-600 data-[state=active]:text-white"
           >
             {tab.label} ({groups[tab.value].length})
           </Tabs.Trigger>

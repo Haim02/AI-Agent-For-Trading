@@ -74,26 +74,26 @@ function OHLCBar({ info }: { info: DayInfo }) {
   return (
     <div
       dir="ltr"
-      className="scrollbar-none flex items-center gap-4 overflow-x-auto border-b border-gray-800 bg-gray-900 px-4 py-2 text-xs"
+      className="scrollbar-none flex items-center gap-4 overflow-x-auto border-b border-slate-800 bg-slate-900 px-4 py-2 text-xs"
     >
-      <span className="flex-none text-gray-500">{info.date}</span>
+      <span className="flex-none text-slate-500">{info.date}</span>
       <span className={`flex-none font-bold ${isUp ? "text-green-400" : "text-red-400"}`}>
         {isUp ? "▲" : "▼"} {Math.abs(info.change_pct).toFixed(2)}%
       </span>
-      <span className="flex-none text-gray-500">
-        פתיחה: <span className="text-gray-300">{info.open?.toLocaleString()}</span>
+      <span className="flex-none text-slate-500">
+        פתיחה: <span className="text-slate-300">{info.open?.toLocaleString()}</span>
       </span>
-      <span className="flex-none text-gray-500">
+      <span className="flex-none text-slate-500">
         גבוה: <span className="text-green-400">{info.high?.toLocaleString()}</span>
       </span>
-      <span className="flex-none text-gray-500">
+      <span className="flex-none text-slate-500">
         נמוך: <span className="text-red-400">{info.low?.toLocaleString()}</span>
       </span>
       <span
         className={`flex-none rounded-full px-2 py-0.5 text-xs font-semibold ${
           info.is_market_open
             ? "bg-green-900 text-green-300"
-            : "bg-gray-800 text-gray-400"
+            : "bg-slate-800 text-slate-400"
         }`}
       >
         ● {info.session_label}
@@ -463,14 +463,14 @@ function CandleChart({
       />
 
       {candles.length > 0 && spot > 0 && (
-        <div className="pointer-events-none absolute top-2 left-2 text-xs text-gray-600">
+        <div className="pointer-events-none absolute top-2 left-2 text-xs text-slate-600">
           {candles.length} נרות
         </div>
       )}
 
       {hoverInfo?.candle && (
         <div
-          className="pointer-events-none absolute z-20 min-w-36 rounded-lg border border-gray-700 bg-gray-900/95 px-3 py-2 text-xs shadow-xl"
+          className="pointer-events-none absolute z-20 min-w-36 rounded-lg border border-slate-700 bg-slate-900/95 px-3 py-2 text-xs shadow-xl"
           style={{
             left: Math.min(
               hoverInfo.x + 12,
@@ -479,23 +479,23 @@ function CandleChart({
             top: Math.max(hoverInfo.y - 60, 4),
           }}
         >
-          <div className="mb-1 font-mono text-gray-400">
+          <div className="mb-1 font-mono text-slate-400">
             {hoverInfo.candle.time_il}
           </div>
           <div className="grid grid-cols-2 gap-x-3 font-mono">
-            <span className="text-gray-500">פתיחה</span>
+            <span className="text-slate-500">פתיחה</span>
             <span className="text-right text-white">
               {hoverInfo.candle.open.toLocaleString()}
             </span>
-            <span className="text-gray-500">גבוה</span>
+            <span className="text-slate-500">גבוה</span>
             <span className="text-right text-green-400">
               {hoverInfo.candle.high.toLocaleString()}
             </span>
-            <span className="text-gray-500">נמוך</span>
+            <span className="text-slate-500">נמוך</span>
             <span className="text-right text-red-400">
               {hoverInfo.candle.low.toLocaleString()}
             </span>
-            <span className="text-gray-500">סגירה</span>
+            <span className="text-slate-500">סגירה</span>
             <span
               className={`text-right font-bold ${
                 hoverInfo.candle.close >= hoverInfo.candle.open
@@ -531,7 +531,7 @@ function Legend({ levels, arrows }: { levels: Level[]; arrows: Arrow[] }) {
   return (
     <div
       dir="ltr"
-      className="flex flex-wrap gap-x-4 gap-y-1 border-t border-gray-800 bg-gray-900 px-4 py-2.5"
+      className="flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-800 bg-slate-900 px-4 py-2.5"
     >
       {levels.map((l) => (
         <div key={l.id} className="flex items-center gap-1.5">
@@ -562,7 +562,7 @@ function LevelList({ levels, spot }: { levels: Level[]; spot: number }) {
   const sorted = [...levels].sort((a, b) => b.price - a.price);
   return (
     <div className="space-y-2 px-4 pt-4 pb-2">
-      <div className="mb-3 text-xs font-semibold uppercase tracking-widest text-gray-500">
+      <div className="mb-3 text-xs font-semibold uppercase tracking-widest text-slate-500">
         רמות GEX – 0DTE
       </div>
       {sorted.map((l) => {
@@ -572,7 +572,7 @@ function LevelList({ levels, spot }: { levels: Level[]; spot: number }) {
         return (
           <div
             key={l.id}
-            className="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900 px-4 py-3"
+            className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900 px-4 py-3"
           >
             <div className="flex items-center gap-3">
               <div
@@ -588,12 +588,12 @@ function LevelList({ levels, spot }: { levels: Level[]; spot: number }) {
                     {l.label}
                   </span>
                   {isOffChart && (
-                    <span className="rounded-full bg-gray-700 px-2 py-0.5 text-xs text-gray-400">
+                    <span className="rounded-full bg-slate-700 px-2 py-0.5 text-xs text-slate-400">
                       מחוץ לטווח
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-gray-500">{l.description}</div>
+                <div className="text-xs text-slate-500">{l.description}</div>
               </div>
             </div>
             <div className="text-right">
@@ -642,12 +642,12 @@ export default function GEXChart() {
   const isPositive = data?.regime === "positive";
 
   return (
-    <div className="min-h-screen select-none bg-gray-950 pb-24 text-white">
+    <div className="min-h-screen select-none bg-slate-950 pb-24 text-white">
       <div className="flex items-center justify-between px-4 pt-5 pb-2">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight">GEX Chart</h1>
-            <span className="rounded-full bg-blue-900 px-2 py-0.5 text-xs font-medium text-blue-300">
+            <span className="rounded-full bg-blue-900 px-2 py-0.5 text-xs font-medium text-indigo-300">
               0DTE
             </span>
           </div>
@@ -685,7 +685,7 @@ export default function GEXChart() {
               setForceKey((k) => k + 1);
               refetch();
             }}
-            className="rounded-xl bg-gray-800 p-2.5 text-lg transition-colors active:bg-gray-700"
+            className="rounded-xl bg-slate-800 p-2.5 text-lg transition-colors active:bg-slate-700"
             aria-label="רענן"
           >
             🔄
@@ -701,7 +701,7 @@ export default function GEXChart() {
             key={t}
             onClick={() => setTicker(t)}
             className={`flex-none rounded-full px-4 py-1.5 text-sm font-semibold transition-all ${
-              ticker === t ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"
+              ticker === t ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"
             }`}
           >
             {t}
@@ -709,16 +709,16 @@ export default function GEXChart() {
         ))}
       </div>
 
-      <div className="border-y border-gray-800 bg-gray-950">
+      <div className="border-y border-slate-800 bg-slate-950">
         {isLoading && (
           <div
             style={{ height: 480 }}
-            className="flex items-center justify-center text-gray-500"
+            className="flex items-center justify-center text-slate-500"
           >
             <div className="text-center">
               <div className="mb-3 text-4xl">📊</div>
               <div className="text-sm">טוען גרף 0DTE – {ticker}</div>
-              <div className="mt-1 text-xs text-gray-600">נרות יומיים 5 דקות</div>
+              <div className="mt-1 text-xs text-slate-600">נרות יומיים 5 דקות</div>
             </div>
           </div>
         )}
@@ -733,7 +733,7 @@ export default function GEXChart() {
               <div>שגיאה בטעינת נתונים</div>
               <button
                 onClick={() => refetch()}
-                className="mt-3 rounded-xl bg-gray-800 px-4 py-2 text-sm text-gray-300"
+                className="mt-3 rounded-xl bg-slate-800 px-4 py-2 text-sm text-slate-300"
               >
                 נסה שוב
               </button>
@@ -754,7 +754,7 @@ export default function GEXChart() {
       {data && <Legend levels={data.levels || []} arrows={data.arrows || []} />}
 
       {lastUpdate && (
-        <div className="py-2 text-center text-xs text-gray-600">
+        <div className="py-2 text-center text-xs text-slate-600">
           עדכון אחרון: {lastUpdate} ● מתרענן כל דקה
         </div>
       )}

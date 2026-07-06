@@ -3,7 +3,7 @@ import type { Position } from "../../types";
 export default function PositionCard({ position }: { position: Position }) {
   const credit = position.premium_received ?? position.premium_paid ?? 0;
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 shadow-md">
+    <div className="card card-hover p-4">
       <div className="flex items-center justify-between">
         <span className="font-mono text-lg font-bold">{position.ticker}</span>
         <span

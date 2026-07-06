@@ -53,7 +53,7 @@ const STATUS_STYLES: Record<
   pass: { bg: "bg-green-900/30", border: "border-green-700", icon: "✅", text: "text-green-400" },
   fail: { bg: "bg-red-900/30", border: "border-red-700", icon: "❌", text: "text-red-400" },
   warning: { bg: "bg-yellow-900/20", border: "border-yellow-700", icon: "⚠️", text: "text-yellow-400" },
-  info: { bg: "bg-gray-800", border: "border-gray-700", icon: "ℹ️", text: "text-gray-400" },
+  info: { bg: "bg-slate-800", border: "border-slate-700", icon: "ℹ️", text: "text-slate-400" },
 };
 
 const STRATEGIES: [string, string][] = [
@@ -100,33 +100,33 @@ export default function Checklist() {
   const running = isLoading || isFetching;
 
   return (
-    <div className="min-h-screen bg-gray-950 pb-24 text-white">
+    <div className="min-h-screen bg-slate-950 pb-24 text-white">
       <div className="px-4 pt-5 pb-4">
         <h1 className="text-2xl font-bold">צ'קליסט לפני עסקה</h1>
-        <p className="mt-1 text-sm text-gray-500">בדוק כל פרמטר לפני כניסה</p>
+        <p className="mt-1 text-sm text-slate-500">בדוק כל פרמטר לפני כניסה</p>
       </div>
 
       <div className="space-y-4 px-4">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1.5 block text-xs text-gray-400">Ticker</label>
+            <label className="mb-1.5 block text-xs text-slate-400">Ticker</label>
             <input
               value={form.ticker}
               onChange={(e) =>
                 setForm((f) => ({ ...f, ticker: e.target.value.toUpperCase() }))
               }
-              className="w-full rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 font-mono text-white outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 font-mono text-white outline-none focus:border-indigo-400"
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-xs text-gray-400">DTE</label>
+            <label className="mb-1.5 block text-xs text-slate-400">DTE</label>
             <input
               type="number"
               value={form.dte}
               onChange={(e) =>
                 setForm((f) => ({ ...f, dte: parseInt(e.target.value) || 0 }))
               }
-              className="w-full rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 font-mono text-white outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 font-mono text-white outline-none focus:border-indigo-400"
             />
           </div>
         </div>
@@ -137,7 +137,7 @@ export default function Checklist() {
               key={k}
               onClick={() => setForm((f) => ({ ...f, strategy: k }))}
               className={`rounded-xl py-2 text-xs font-medium transition-all ${
-                form.strategy === k ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"
+                form.strategy === k ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"
               }`}
             >
               {l}
@@ -147,23 +147,23 @@ export default function Checklist() {
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1.5 block text-xs text-gray-400">Short Call Strike</label>
+            <label className="mb-1.5 block text-xs text-slate-400">Short Call Strike</label>
             <input
               type="number"
               value={form.short_call}
               onChange={(e) => setForm((f) => ({ ...f, short_call: e.target.value }))}
               placeholder="אופציונלי"
-              className="w-full rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 font-mono text-sm text-white outline-none focus:border-green-500"
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 font-mono text-sm text-white outline-none focus:border-green-500"
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-xs text-gray-400">Short Put Strike</label>
+            <label className="mb-1.5 block text-xs text-slate-400">Short Put Strike</label>
             <input
               type="number"
               value={form.short_put}
               onChange={(e) => setForm((f) => ({ ...f, short_put: e.target.value }))}
               placeholder="אופציונלי"
-              className="w-full rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 font-mono text-sm text-white outline-none focus:border-red-500"
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 font-mono text-sm text-white outline-none focus:border-red-500"
             />
           </div>
         </div>
@@ -173,7 +173,7 @@ export default function Checklist() {
             if (submitted) refetch();
             else setSubmitted(true);
           }}
-          className="w-full rounded-2xl bg-blue-600 py-4 text-base font-bold text-white active:bg-blue-700"
+          className="w-full rounded-2xl bg-indigo-600 py-4 text-base font-bold text-white active:bg-blue-700"
         >
           {running ? "בודק..." : "🔍 הרץ צ'קליסט"}
         </button>
@@ -191,13 +191,13 @@ export default function Checklist() {
             <div className="text-xl font-bold">{data.verdict_text}</div>
           </div>
 
-          <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
-            <div className="mb-2 flex justify-between text-xs text-gray-500">
+          <div className="card p-4">
+            <div className="mb-2 flex justify-between text-xs text-slate-500">
               <span>0</span>
               <span>ציון: {data.score}/100</span>
               <span>100</span>
             </div>
-            <div className="h-3 overflow-hidden rounded-full bg-gray-800">
+            <div className="h-3 overflow-hidden rounded-full bg-slate-800">
               <div
                 className={`h-full rounded-full transition-all duration-700 ${
                   data.score >= 80
@@ -223,7 +223,7 @@ export default function Checklist() {
                     </div>
                     <span className={`font-mono text-sm font-bold ${s.text}`}>{c.value}</span>
                   </div>
-                  <p className="mr-6 text-xs text-gray-400">{c.message}</p>
+                  <p className="mr-6 text-xs text-slate-400">{c.message}</p>
                 </div>
               );
             })}

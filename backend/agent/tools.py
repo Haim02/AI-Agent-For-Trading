@@ -224,6 +224,59 @@ async def save_position(position_data: dict) -> str:
     return f"✅ פוזיציה נשמרה (id={result.inserted_id})."
 
 
+async def search_knowledge(query: str) -> str:
+    """מחפש בספרייה המקצועית (חומרי NotebookLM: קורסים, מדריכים ותמלולים על GEX/DEX/Flow)."""
+    def _run() -> list[dict]:
+        from memory.trading_library import TradingLibrary
+
+        return TradingLibrary().query(query, n_results=5)
+
+    try:
+        excerpts = await asyncio.to_thread(_run)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("search_knowledge failed")
+        return f"החיפוש בספרייה נכשל: {exc}"
+
+    if not excerpts:
+        return "לא נמצא חומר רלוונטי בספרייה המקצועית לשאילתה הזו."
+
+    lines = [f"📚 מהספרייה המקצועית – תוצאות עבור: {query}"]
+    for item in excerpts:
+        lines.append(
+            f"\n[{item.get('notebook') or '—'} / {item.get('doc_title') or '—'}]\n"
+            f"{(item.get('content') or '')[:900]}"
+        )
+    return "\n".join(lines)
+
+
+async def save_memory(content: str, category: str = "lesson") -> str:
+    """שומר לקח, העדפה או דפוס שוק לזיכרון ארוך הטווח (כשחיים מלמד משהו חדש)."""
+    def _run() -> str:
+        ltm = LongTermMemory()
+        cat = (category or "lesson").lower().strip()
+        if cat in ("preference", "behavior", "goal", "risk_tolerance"):
+            ltm.save_user_fact(content, category=cat)
+            return "user_profile"
+        if cat in ("lesson", "trade_learning"):
+            ltm.save_trade_learning(content, context={})
+            return "trade_learnings"
+        if cat in ("pattern", "market_pattern"):
+            ltm.save_market_pattern(content, conditions={})
+            return "market_patterns"
+        if cat in ("strategy", "strategy_knowledge"):
+            ltm.save_strategy_knowledge(content, context={})
+            return "strategy_knowledge"
+        ltm.save_knowledge(content, {"category": cat})
+        return "knowledge_base"
+
+    try:
+        collection = await asyncio.to_thread(_run)
+        return f"✅ נשמר בזיכרון ({collection}): {content[:120]}"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("save_memory failed")
+        return f"שמירת הזיכרון נכשלה: {exc}"
+
+
 async def recall_memory(query: str) -> str:
     """שולף זיכרונות רלוונטיים על עסקאות ודפוסים קודמים."""
     def _run() -> dict:
@@ -1020,6 +1073,18 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
     "recall_memory": AgentTool(
         "recall_memory", "שולף זיכרונות רלוונטיים על עסקאות ודפוסים קודמים", recall_memory
     ),
+    "search_knowledge": AgentTool(
+        "search_knowledge",
+        "מחפש בספרייה המקצועית של חיים (קורסים ומדריכים על GEX/DEX/Order Flow מ-NotebookLM). "
+        "השתמש כשצריך עומק תיאורטי, כללים או שיטות מהחומר שחיים לומד ממנו",
+        search_knowledge,
+    ),
+    "save_memory": AgentTool(
+        "save_memory",
+        "שומר לזיכרון ארוך-טווח לקח/העדפה/דפוס. קטגוריות: preference, lesson, pattern, strategy. "
+        "השתמש כשחיים מלמד אותך משהו או כשמתגלה תובנה ששווה לזכור",
+        save_memory,
+    ),
     "send_telegram": AgentTool(
         "send_telegram", "שולח הודעה לחיים בטלגרם", send_telegram
     ),
@@ -1153,4 +1218,62 @@ def list_tool_descriptions() -> str:
     return "\n".join(f"- {t.name}: {t.description}" for t in TOOL_REGISTRY.values())
 
 
-__all__ = ["AgentTool", "TOOL_REGISTRY", "list_tool_descriptions"]
+# ─────────────────── Anthropic native tool-use schemas ───────────────────
+
+def _json_type_for(annotation: Any) -> str:
+    """Map a Python annotation to a JSON-schema type (best effort)."""
+    text = str(annotation)
+    if annotation in (int,) or text in ("<class 'int'>",):
+        return "integer"
+    if annotation in (float,) or "float" in text:
+        return "number"
+    if annotation in (bool,) or "bool" in text:
+        return "boolean"
+    if annotation in (dict,) or "dict" in text.lower():
+        return "object"
+    return "string"
+
+
+def _schema_from_func(func: Callable[..., Any]) -> dict[str, Any]:
+    """Derive a permissive JSON schema from a tool function's signature."""
+    import inspect
+
+    props: dict[str, Any] = {}
+    required: list[str] = []
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return {"type": "object", "properties": {}}
+
+    for name, param in sig.parameters.items():
+        # "_" placeholders and **kwargs don't belong in the schema.
+        if name.startswith("_") or param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        props[name] = {"type": _json_type_for(param.annotation)}
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+
+    schema: dict[str, Any] = {"type": "object", "properties": props}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def anthropic_tool_specs() -> list[dict[str, Any]]:
+    """Tool definitions in the Anthropic Messages API format."""
+    specs: list[dict[str, Any]] = []
+    for tool in TOOL_REGISTRY.values():
+        specs.append(
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": _schema_from_func(tool.func),
+            }
+        )
+    return specs
+
+
+__all__ = ["AgentTool", "TOOL_REGISTRY", "list_tool_descriptions", "anthropic_tool_specs"]

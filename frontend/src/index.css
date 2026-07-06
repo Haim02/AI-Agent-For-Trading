@@ -1,11 +1,61 @@
+@import url("https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 
-html, body, #root {
+@theme {
+  --font-sans: "Heebo", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    "Noto Sans Hebrew", "Segoe UI Hebrew", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Surface scale – deep navy, slightly blue-shifted for a premium feel */
+  --color-surface-950: #060913;
+  --color-surface-900: #0b1120;
+  --color-surface-850: #0f172a;
+  --color-surface-800: #16203a;
+  --color-surface-700: #1f2c4d;
+
+  /* Brand accent */
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+
+  --animate-fade-up: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-pulse-dot: pulse-dot 2s ease-in-out infinite;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgb(52 211 153 / 0.55);
+    }
+    50% {
+      box-shadow: 0 0 0 5px rgb(52 211 153 / 0);
+    }
+  }
+}
+
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
-  background: #0f172a;
+  background:
+    radial-gradient(1200px 500px at 85% -10%, rgb(79 70 229 / 0.14), transparent 60%),
+    radial-gradient(900px 420px at 5% 110%, rgb(16 185 129 / 0.07), transparent 55%),
+    var(--color-surface-950);
+  background-attachment: fixed;
   color: #f8fafc;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, "Noto Sans Hebrew", "Segoe UI Hebrew", sans-serif;
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum";
 }
 
 * {
@@ -17,10 +67,96 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
-.scrollbar-hide {
+/* ── Slim, dark scrollbars everywhere ───────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-hide,
+.scrollbar-none {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
-.scrollbar-hide::-webkit-scrollbar {
+.scrollbar-hide::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
   display: none;
+}
+
+/* ── Shared component classes ───────────────────────────────── */
+@layer components {
+  /* The one true panel: used by every card on the site */
+  .card {
+    border-radius: 1rem;
+    border: 1px solid rgb(148 163 184 / 0.09);
+    background:
+      linear-gradient(160deg, rgb(148 163 184 / 0.055), transparent 38%),
+      rgb(11 17 32 / 0.82);
+    box-shadow:
+      0 1px 0 0 rgb(255 255 255 / 0.03) inset,
+      0 10px 30px -12px rgb(0 0 0 / 0.55);
+    backdrop-filter: blur(8px);
+  }
+
+  .card-hover {
+    transition:
+      transform 0.2s ease,
+      border-color 0.2s ease,
+      box-shadow 0.2s ease;
+  }
+  .card-hover:hover {
+    transform: translateY(-2px);
+    border-color: rgb(129 140 248 / 0.35);
+    box-shadow:
+      0 1px 0 0 rgb(255 255 255 / 0.04) inset,
+      0 16px 40px -12px rgb(0 0 0 / 0.65);
+  }
+
+  .glass {
+    background: rgb(6 9 19 / 0.72);
+    backdrop-filter: blur(14px);
+    border-color: rgb(148 163 184 / 0.09);
+  }
+
+  .section-title {
+    font-size: 0.875rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: #e2e8f0;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: 9999px;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  .grad-text {
+    background: linear-gradient(90deg, #a5b4fc, #67e8f9);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
 }

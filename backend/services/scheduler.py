@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -6,14 +7,11 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from dataclasses import asdict
-
 from agent.autonomous_agent import get_autonomous_agent
 from db.connection import get_db
 from memory.long_term import LongTermMemory
 from memory.reflection_engine import ReflectionEngine, ReflectionEngineError
 from memory.short_term import ShortTermMemory
-from scrapers.menthorq_scraper import MenthorQScraper
 from services.daily_stock_scanner import DailyStockScanner
 from services.news_monitor import NewsMonitor
 from services.smart_news_monitor import SmartNewsMonitor
@@ -224,7 +222,7 @@ async def job_run_morning_scan() -> None:
 
 
 async def send_market_open_alert() -> None:
-    """16:30 Israel time – ping Haim that the US market just opened."""
+    """16:30 Israel – US market open ping + today's SPX GEX levels for 0DTE."""
     try:
         from tools.macro_tool import MacroTool
         from utils.time_helper import now_israel
@@ -246,6 +244,23 @@ async def send_market_open_alert() -> None:
             body=body,
             urgency="medium",
         )
+
+        # Immediately follow with today's SPX gamma levels – the core 0DTE map.
+        try:
+            from analytics.gex_engine import GEXEngine
+
+            gex = await GEXEngine().get_full_gex_analysis("SPX")
+            if "error" not in gex and gex.get("analysis_hebrew"):
+                gex_body = gex["analysis_hebrew"]
+                if gex.get("warning") == "estimated_levels":
+                    gex_body += "\n\n⚠️ נתונים משוערים בלבד"
+                await tg.send_alert(
+                    title="⚡ רמות GEX להיום – SPX 0DTE",
+                    body=gex_body,
+                    urgency="medium",
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("market_open GEX report failed")
     except Exception:  # noqa: BLE001
         logger.exception("send_market_open_alert failed")
 
@@ -268,19 +283,39 @@ async def job_risk_check() -> None:
 
 
 async def job_scrape_gex_data() -> None:
+    """Persist a GEX snapshot every 30 min (FlashAlpha → UW → Massive → yfinance)."""
     if not _is_market_hours():
-        logger.debug("Skipping GEX scrape – outside market hours")
+        logger.debug("Skipping GEX snapshot – outside market hours")
         return
     try:
-        with MenthorQScraper(headless=True) as scraper:
-            gex = scraper.scrape_gex_data()
+        from analytics.gex_engine import GEXEngine
+
+        gex = await GEXEngine().get_full_gex_analysis("SPX")
+        if "error" in gex:
+            logger.warning("GEX snapshot skipped – %s", gex["error"])
+            return
         db = get_db()
-        snapshot = asdict(gex)
-        snapshot["timestamp"] = gex.timestamp
+        snapshot = dict(gex)
+        snapshot["timestamp"] = datetime.utcnow()
         await db.gex_history.insert_one(snapshot)
-        logger.info("GEX snapshot saved – regime=%s total=%s", gex.regime, gex.gex_total)
+        logger.info(
+            "GEX snapshot saved – regime=%s total=%s",
+            gex.get("regime"), gex.get("total_gex"),
+        )
     except Exception:  # noqa: BLE001
         logger.exception("job_scrape_gex_data failed")
+
+
+async def job_dex_monitor() -> None:
+    """Intraday Delta support/resistance watch for SPX (user-requested)."""
+    if not _is_market_hours():
+        return
+    try:
+        from services.dex_monitor import DexMonitor
+
+        await DexMonitor().check_and_alert("SPX")
+    except Exception:  # noqa: BLE001
+        logger.exception("job_dex_monitor failed")
 
 
 async def job_smart_news_company() -> None:
@@ -366,13 +401,9 @@ async def job_monitor_unusual_options() -> None:
         trades = await massive.get_unusual_options_activity(min_volume=2500)
     except Exception:  # noqa: BLE001
         logger.exception("job_monitor_unusual_options failed")
-        await massive.close()
         return
     finally:
-        # close after fetching – fresh client every job run
-        pass
-
-    await massive.close()
+        await massive.close()
 
     if not trades:
         return
@@ -719,6 +750,14 @@ def start_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
     )
+    # DEX (Delta) support/resistance monitor – every 30 min during the US session.
+    _scheduler.add_job(
+        job_dex_monitor,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="10,40", timezone=EST),
+        id="dex_monitor",
+        replace_existing=True,
+        max_instances=1,
+    )
 
     # ───────── Smart news monitor (Israel hours) ─────────
     # News during US market hours: 16:30–23:00 Israel = 13:30–20:00 UTC
@@ -878,9 +917,10 @@ def start_scheduler() -> AsyncIOScheduler:
     _scheduler.start()
     logger.info(
         "Scheduler started. Israel-time jobs: morning_briefing_israel (08:00), "
-        "pre_market_scan (14:00), market_open_alert (16:30), news_company (16:30–23:00), "
-        "eod_summary (23:30), macro_news (08:00/13:00/20:00). "
-        "EST jobs retained: market_news, ticker_news, risk_check, gex_snapshot, iv_spikes."
+        "pre_market_scan (14:00), market_open_alert+SPX GEX (16:30), "
+        "news_company (16:30–23:00), eod_summary (23:30), macro_news (08:00/13:00/20:00). "
+        "Session jobs: dex_monitor (30m), wall_break_check (5m), gex_snapshot (30m), "
+        "risk_check, iv_spikes, unusual_flow, whale_signals."
     )
     return _scheduler
 

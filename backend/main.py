@@ -7,6 +7,11 @@ from typing import Optional
 os.environ["TZ"] = "Asia/Jerusalem"
 
 from dotenv import load_dotenv
+
+# Load env vars before importing app modules so anything that reads the
+# environment at import time (DB URL, API keys) sees the .env values.
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,7 +32,6 @@ logger = logging.getLogger("options_agent")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    load_dotenv()
     logger.info("Starting Options Agent API ...")
 
     ok = await ping()
@@ -42,6 +46,16 @@ async def lifespan(app: FastAPI):
         logger.info("✅ GEX Knowledge loaded: %d items", count)
     except Exception as exc:  # noqa: BLE001
         logger.warning("GEX Knowledge load failed: %s", exc)
+
+    # Trading library – NotebookLM course material (GEX/DEX/flow) for RAG.
+    try:
+        from memory.trading_library import TradingLibrary
+
+        chunks = await TradingLibrary().load_all()
+        if chunks >= 0:
+            logger.info("✅ Trading library indexed: %d chunks", chunks)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Trading library load failed: %s", exc)
 
     # FlashAlpha primary GEX source – verify the official SDK is importable
     # and log the active plan + daily usage so the operator can spot quota

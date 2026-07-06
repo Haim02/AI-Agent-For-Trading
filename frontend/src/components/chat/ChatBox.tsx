@@ -1,10 +1,11 @@
-import { Send } from "lucide-react";
+import { Bot, Send, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAgent } from "../../hooks/useAgent";
 
 const QUICK_PROMPTS = [
+  { label: "⚡ רמות GEX של SPX", value: "מה רמות ה-GEX של SPX להיום?" },
+  { label: "🧲 תמיכות Delta", value: "מה התמיכות וההתנגדויות של Delta עכשיו?" },
   { label: "🔍 סרוק שוק", value: "סרוק את השוק ומצא הזדמנויות" },
-  { label: "📊 מצב GEX", value: "מה מצב ה-GEX של SPY עכשיו?" },
   { label: "💼 הפוזיציות שלי", value: "הצג את הפוזיציות הפתוחות שלי" },
   { label: "📋 סיכום יום", value: "תן לי סיכום של יום המסחר" },
 ];
@@ -51,23 +52,39 @@ export default function ChatBox() {
   };
 
   return (
-    <div className="flex h-full flex-col rounded-xl border border-slate-800 bg-slate-900/70 shadow-lg">
-      <div className="flex-1 space-y-3 overflow-y-auto px-3 py-3 lg:px-4 lg:py-4">
+    <div className="card flex h-full flex-col overflow-hidden">
+      <div className="flex-1 space-y-3 overflow-y-auto px-3 py-4 lg:px-5">
         {messages.length === 0 && (
-          <div className="text-center text-sm text-slate-400">
-            שלח שאלה לסוכן, או השתמש בפעולה מהירה למטה.
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-cyan-400 shadow-lg shadow-indigo-500/30">
+              <Bot className="h-7 w-7 text-white" />
+            </div>
+            <div>
+              <div className="font-bold text-slate-100">שלום חיים 👋</div>
+              <div className="mt-1 max-w-xs text-sm text-slate-500">
+                שאל אותי על GEX, רמות Delta, פוזיציות או חדשות — או בחר פעולה
+                מהירה למטה
+              </div>
+            </div>
           </div>
         )}
         {messages.map((msg, idx) => (
           <div
             key={idx}
-            className={`flex ${msg.role === "user" ? "justify-start" : "justify-end"}`}
+            className={`flex items-end gap-2 ${
+              msg.role === "user" ? "justify-start" : "justify-end"
+            }`}
           >
+            {msg.role !== "user" && (
+              <div className="order-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-400">
+                <Bot className="h-3.5 w-3.5 text-white" />
+              </div>
+            )}
             <div
-              className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed shadow lg:max-w-[70%] lg:px-4 ${
+              className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed lg:max-w-[70%] lg:px-4 ${
                 msg.role === "user"
-                  ? "bg-blue-600 text-white"
-                  : "bg-slate-800 text-slate-100"
+                  ? "rounded-bl-md bg-gradient-to-br from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/25"
+                  : "order-1 rounded-br-md border border-slate-800/70 bg-slate-900/80 text-slate-100"
               }`}
             >
               <MessageContent content={msg.content} />
@@ -75,12 +92,15 @@ export default function ChatBox() {
           </div>
         ))}
         {pending && (
-          <div className="flex justify-end">
-            <div className="rounded-2xl bg-slate-800 px-4 py-2 text-sm text-slate-300">
+          <div className="flex items-end justify-end gap-2">
+            <div className="order-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-400">
+              <Bot className="h-3.5 w-3.5 text-white" />
+            </div>
+            <div className="order-1 rounded-2xl rounded-br-md border border-slate-800/70 bg-slate-900/80 px-4 py-3">
               <span className="inline-flex gap-1">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-400 [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-400 [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-400" />
               </span>
             </div>
           </div>
@@ -88,15 +108,15 @@ export default function ChatBox() {
         <div ref={endRef} />
       </div>
 
-      <div className="border-t border-slate-800 px-3 py-3 lg:px-4">
-        <div className="scrollbar-hide mb-2 flex gap-2 overflow-x-auto pb-2">
+      <div className="border-t border-slate-800/60 bg-slate-950/40 px-3 py-3 lg:px-4">
+        <div className="scrollbar-hide mb-2.5 flex gap-2 overflow-x-auto pb-1">
           {QUICK_PROMPTS.map((p) => (
             <button
               key={p.label}
               type="button"
               onClick={() => handleSubmit(p.value)}
               disabled={pending}
-              className="shrink-0 whitespace-nowrap rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+              className="shrink-0 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/60 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-indigo-400/40 hover:bg-slate-700/60 hover:text-white disabled:opacity-50"
             >
               {p.label}
             </button>
@@ -109,18 +129,21 @@ export default function ChatBox() {
           }}
           className="flex items-center gap-2"
         >
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="שאלה לסוכן…"
-            className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-            disabled={pending}
-          />
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="שאל את הסוכן..."
+              className="w-full rounded-xl border border-slate-700/70 bg-slate-950/80 py-2.5 pl-9 pr-3.5 text-sm text-white placeholder:text-slate-600 transition-colors focus:border-indigo-400/60 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              disabled={pending}
+            />
+            <Sparkles className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
+          </div>
           <button
             type="submit"
             disabled={pending || !input.trim()}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-indigo-600 to-indigo-500 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-600/25 transition-all hover:brightness-110 disabled:opacity-40 disabled:shadow-none"
             aria-label="שלח"
           >
             <Send className="h-4 w-4" />

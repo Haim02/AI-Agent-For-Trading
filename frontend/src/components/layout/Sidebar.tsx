@@ -1,57 +1,77 @@
 import { NavLink } from "react-router-dom";
-import {
-  BarChart2,
-  Brain,
-  Calendar,
-  CheckSquare,
-  Fish,
-  LayoutDashboard,
-  LineChart,
-  MessageCircle,
-  Search,
-  TrendingUp,
-} from "lucide-react";
-
-const NAV_ITEMS = [
-  { to: "/", label: "דשבורד", icon: LayoutDashboard },
-  { to: "/positions", label: "פוזיציות", icon: TrendingUp },
-  { to: "/journal", label: "יומן", icon: Calendar },
-  { to: "/scanner", label: "סורק", icon: Search },
-  { to: "/chart", label: "GEX Chart", icon: LineChart },
-  { to: "/checklist", label: "צ'קליסט", icon: CheckSquare },
-  { to: "/narrative", label: "ניתוח AI", icon: Brain },
-  { to: "/signals", label: "סיגנלים", icon: Fish },
-  { to: "/chat", label: "צ'אט", icon: MessageCircle },
-  { to: "/analytics", label: "דשבורד אנליטיקס", icon: BarChart2 },
-];
+import { Bot } from "lucide-react";
+import { NAV_GROUPS } from "./nav";
 
 export default function Sidebar() {
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-l border-slate-800 bg-slate-950">
-      <div className="px-5 py-6 text-xl font-bold tracking-tight">
-        Options Agent <span aria-hidden>🤖</span>
+    <aside className="glass flex h-full w-64 shrink-0 flex-col border-l">
+      {/* Logo */}
+      <div className="flex items-center gap-3 px-5 py-6">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-400 shadow-lg shadow-indigo-500/25">
+          <Bot className="h-5 w-5 text-white" />
+        </div>
+        <div>
+          <div className="text-base font-extrabold tracking-tight">
+            Options <span className="grad-text">Agent</span>
+          </div>
+          <div className="text-[11px] font-medium text-slate-500">
+            SPX 0DTE · GEX/DEX
+          </div>
+        </div>
       </div>
-      <nav className="flex flex-col gap-1 px-3">
-        {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === "/"}
-            className={({ isActive }) =>
-              `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                isActive
-                  ? "bg-blue-600/90 text-white shadow"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
-              }`
-            }
-          >
-            <Icon className="h-4 w-4" />
-            <span>{label}</span>
-          </NavLink>
+
+      {/* Nav groups */}
+      <nav className="flex-1 space-y-5 overflow-y-auto px-3 pb-4">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.title}>
+            <div className="mb-1.5 px-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+              {group.title}
+            </div>
+            <div className="flex flex-col gap-0.5">
+              {group.items.map(({ to, label, icon: Icon }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === "/"}
+                  className={({ isActive }) =>
+                    `group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 ${
+                      isActive
+                        ? "bg-gradient-to-l from-indigo-500/25 to-indigo-500/5 text-white"
+                        : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-100"
+                    }`
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      {/* Active indicator bar (RTL: sits on the right edge) */}
+                      <span
+                        className={`absolute -right-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-full bg-gradient-to-b from-indigo-400 to-cyan-400 transition-opacity ${
+                          isActive ? "opacity-100" : "opacity-0"
+                        }`}
+                      />
+                      <Icon
+                        className={`h-4 w-4 shrink-0 transition-colors ${
+                          isActive
+                            ? "text-indigo-300"
+                            : "text-slate-500 group-hover:text-slate-300"
+                        }`}
+                      />
+                      <span>{label}</span>
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
-      <div className="mt-auto px-5 py-4 text-xs text-slate-500">
-        v0.1 • סוכן אוטונומי
+
+      {/* Footer */}
+      <div className="border-t border-slate-800/60 px-5 py-4">
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse-dot" />
+          <span>הסוכן פעיל · v1.0</span>
+        </div>
       </div>
     </aside>
   );

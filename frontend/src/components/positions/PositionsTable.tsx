@@ -64,7 +64,7 @@ export default function PositionsTable({ positions, onDelete }: Props) {
   };
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 shadow-lg lg:p-4">
+    <div className="card p-3 lg:p-4">
       {/* Filter chips – scrollable horizontally on mobile */}
       <div className="scrollbar-hide mb-3 flex gap-2 overflow-x-auto pb-2">
         {(Object.keys(FILTER_LABEL) as Filter[]).map((key) => (
@@ -74,7 +74,7 @@ export default function PositionsTable({ positions, onDelete }: Props) {
             onClick={() => setFilter(key)}
             className={`shrink-0 whitespace-nowrap rounded-lg px-4 py-2 text-xs font-medium transition-colors ${
               filter === key
-                ? "bg-blue-600 text-white"
+                ? "bg-indigo-600 text-white"
                 : "bg-slate-800 text-slate-300 hover:bg-slate-700"
             }`}
           >

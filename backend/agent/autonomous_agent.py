@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Optional
 
@@ -13,7 +12,6 @@ from agent.graph import create_agent_graph
 from agent.state import initial_state
 from db.connection import get_db
 from memory.reflection_engine import ReflectionEngine, ReflectionEngineError
-from scrapers.menthorq_scraper import MenthorQScraper
 from services.telegram_service import TelegramService, TelegramServiceError
 from tools.fear_greed_tool import FearGreedTool
 from tools.macro_tool import MacroTool
@@ -50,8 +48,24 @@ class AutonomousAgent:
         session = session_id or f"session:{uuid.uuid4().hex[:12]}"
         graph = self._ensure_graph()
         state = initial_state(user_message, session_id=session)
+
         if conversation_history:
             state["messages"] = list(conversation_history)
+        elif not session.startswith("auto:"):
+            # No in-memory history (e.g. after a restart) – restore the last
+            # turns from persistent short-term memory so the agent remembers.
+            try:
+                from memory.short_term import ShortTermMemory
+
+                persisted = await ShortTermMemory().get_history(session, last_n=20)
+                if persisted:
+                    state["messages"] = [
+                        {"role": m.get("role"), "content": m.get("content")}
+                        for m in persisted
+                    ]
+            except Exception:  # noqa: BLE001
+                logger.exception("run: failed to restore persisted history")
+
         final = await graph.ainvoke(state)
         return final.get("response") or "(לא התקבלה תשובה)"
 
@@ -146,10 +160,13 @@ class AutonomousAgent:
         alerts: list[str] = []
         gex_snapshot: Optional[dict[str, Any]] = None
         try:
-            with MenthorQScraper(headless=True) as scraper:
-                gex_snapshot = asdict(scraper.scrape_gex_data())
+            from analytics.gex_engine import GEXEngine
+
+            snapshot = await GEXEngine().get_full_gex_analysis("SPX")
+            if "error" not in snapshot:
+                gex_snapshot = snapshot
         except Exception:  # noqa: BLE001
-            logger.exception("risk_check: MenthorQ scrape failed")
+            logger.exception("risk_check: GEX fetch failed")
 
         call_wall = float((gex_snapshot or {}).get("call_wall") or 0.0)
         put_wall = float((gex_snapshot or {}).get("put_wall") or 0.0)

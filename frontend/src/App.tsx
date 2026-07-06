@@ -29,7 +29,7 @@ export default function App() {
   }, [supported, permission, requestPermission]);
 
   return (
-    <div dir="rtl" className="flex h-screen bg-slate-900 text-white">
+    <div dir="rtl" className="flex h-screen text-white">
       {/* Sidebar – desktop only */}
       <div className="hidden lg:block">
         <Sidebar />

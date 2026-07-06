@@ -18,6 +18,7 @@ COLLECTIONS = (
     "market_patterns",
     "strategy_knowledge",
     "knowledge_base",
+    "trading_library",  # NotebookLM course material (see memory/trading_library.py)
 )
 
 DEFAULT_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chromadb")

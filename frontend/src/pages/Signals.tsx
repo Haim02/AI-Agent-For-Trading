@@ -71,15 +71,15 @@ function SignalCard({ sig }: { sig: Signal }) {
     ? "text-green-400"
     : isBear
       ? "text-red-400"
-      : "text-gray-400";
+      : "text-slate-400";
 
   const scoreColor =
-    sig.score >= 85 ? "bg-purple-600" : sig.score >= 75 ? "bg-blue-600" : "bg-gray-600";
+    sig.score >= 85 ? "bg-purple-600" : sig.score >= 75 ? "bg-indigo-600" : "bg-slate-600";
 
   const isSweep = sig.structure === "sweep";
 
   return (
-    <div className="rounded-2xl border border-gray-800 bg-gray-900 p-4">
+    <div className="card p-4">
       <div className="mb-3 flex items-start justify-between">
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold">
@@ -103,7 +103,7 @@ function SignalCard({ sig }: { sig: Signal }) {
           {sig.tags.includes("opening") && (
             <span
               title="Opening"
-              className="rounded-full bg-blue-900 px-2 py-0.5 text-xs text-blue-300"
+              className="rounded-full bg-blue-900 px-2 py-0.5 text-xs text-indigo-300"
             >
               NEW
             </span>
@@ -122,8 +122,8 @@ function SignalCard({ sig }: { sig: Signal }) {
         >
           {isCall ? "CALL" : "PUT"} ${sig.strike}
         </span>
-        <span className="text-sm text-gray-500">•</span>
-        <span className="text-sm text-gray-400">
+        <span className="text-sm text-slate-500">•</span>
+        <span className="text-sm text-slate-400">
           {sig.expiry} ({sig.dte}d)
         </span>
       </div>
@@ -132,27 +132,27 @@ function SignalCard({ sig }: { sig: Signal }) {
         <span className={intentColor}>
           {isBull ? "🟢 שורי" : isBear ? "🔴 דובי" : "🟡 ניטרלי"}
         </span>
-        <span className="text-gray-500">{sig.aggressor.replace("_", " ")}</span>
+        <span className="text-slate-500">{sig.aggressor.replace("_", " ")}</span>
         {sig.enrichment?.moneyness && (
-          <span className="text-gray-500">{sig.enrichment.moneyness}</span>
+          <span className="text-slate-500">{sig.enrichment.moneyness}</span>
         )}
       </div>
 
       <div className="grid grid-cols-3 gap-2 text-xs">
-        <div className="rounded-lg bg-gray-800 p-2">
-          <div className="mb-0.5 text-gray-500">פרמיה</div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-0.5 text-slate-500">פרמיה</div>
           <div className="font-mono font-bold text-white">
             ${(sig.premium / 1000).toFixed(0)}K
           </div>
         </div>
-        <div className="rounded-lg bg-gray-800 p-2">
-          <div className="mb-0.5 text-gray-500">גודל</div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-0.5 text-slate-500">גודל</div>
           <div className="font-mono font-bold text-white">
             {sig.size.toLocaleString()}
           </div>
         </div>
-        <div className="rounded-lg bg-gray-800 p-2">
-          <div className="mb-0.5 text-gray-500">מחיר</div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-0.5 text-slate-500">מחיר</div>
           <div className="font-mono font-bold text-white">
             ${sig.price.toFixed(2)}
           </div>
@@ -160,7 +160,7 @@ function SignalCard({ sig }: { sig: Signal }) {
       </div>
 
       {(sig.enrichment?.iv || sig.enrichment?.delta) && (
-        <div className="mt-3 flex gap-4 text-xs text-gray-500">
+        <div className="mt-3 flex gap-4 text-xs text-slate-500">
           {sig.enrichment.iv != null && (
             <span>IV: {(sig.enrichment.iv * 100).toFixed(1)}%</span>
           )}
@@ -170,7 +170,7 @@ function SignalCard({ sig }: { sig: Signal }) {
         </div>
       )}
 
-      <div className="mt-3 text-xs text-gray-600">
+      <div className="mt-3 text-xs text-slate-600">
         {new Date(sig.ts).toLocaleTimeString("he-IL", {
           timeZone: "Asia/Jerusalem",
           hour: "2-digit",
@@ -199,16 +199,16 @@ export default function Signals() {
   const isError = !!errKey;
 
   return (
-    <div className="min-h-screen bg-gray-950 pb-24 text-white">
+    <div className="min-h-screen bg-slate-950 pb-24 text-white">
       <div className="px-4 pt-5 pb-3">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold">🐋 Flow Signals</h1>
-            <p className="mt-1 text-sm text-gray-500">עסקות חריגות מסומנות</p>
+            <p className="mt-1 text-sm text-slate-500">עסקות חריגות מסומנות</p>
           </div>
           <button
             onClick={() => refetch()}
-            className="rounded-xl bg-gray-800 p-2.5 text-lg"
+            className="rounded-xl bg-slate-800 p-2.5 text-lg"
             aria-label="רענן"
           >
             🔄
@@ -222,7 +222,7 @@ export default function Signals() {
             key={t}
             onClick={() => setTicker(t)}
             className={`flex-none rounded-full px-4 py-1.5 text-sm font-semibold ${
-              ticker === t ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"
+              ticker === t ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"
             }`}
           >
             {t}
@@ -232,11 +232,11 @@ export default function Signals() {
 
       <div className="mb-4 grid grid-cols-2 gap-3 px-4">
         <div>
-          <label className="mb-1 block text-xs text-gray-500">ניקוד מינימלי</label>
+          <label className="mb-1 block text-xs text-slate-500">ניקוד מינימלי</label>
           <select
             value={minScore}
             onChange={(e) => setMinScore(Number(e.target.value))}
-            className="w-full rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white"
+            className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
           >
             <option value={50}>50+ (הכל)</option>
             <option value={70}>70+ (חזק)</option>
@@ -245,11 +245,11 @@ export default function Signals() {
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-500">סוג עסקה</label>
+          <label className="mb-1 block text-xs text-slate-500">סוג עסקה</label>
           <select
             value={structure ?? ""}
             onChange={(e) => setStructure(e.target.value || null)}
-            className="w-full rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white"
+            className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
           >
             <option value="">הכל</option>
             <option value="sweep">⚡ Sweep</option>
@@ -259,28 +259,28 @@ export default function Signals() {
       </div>
 
       {chain.call_wall != null && (
-        <div className="mx-4 mb-4 grid grid-cols-4 gap-2 rounded-xl border border-gray-800 bg-gray-900 p-3 text-xs">
+        <div className="mx-4 mb-4 grid grid-cols-4 gap-2 card p-3 text-xs">
           <div>
-            <div className="text-gray-500">CW</div>
+            <div className="text-slate-500">CW</div>
             <div className="font-mono text-green-400">
               ${chain.call_wall.toFixed(0)}
             </div>
           </div>
           <div>
-            <div className="text-gray-500">Flip</div>
+            <div className="text-slate-500">Flip</div>
             <div className="font-mono text-yellow-400">
               ${chain.gamma_flip?.toFixed(0) ?? "—"}
             </div>
           </div>
           <div>
-            <div className="text-gray-500">PW</div>
+            <div className="text-slate-500">PW</div>
             <div className="font-mono text-red-400">
               ${chain.put_wall?.toFixed(0) ?? "—"}
             </div>
           </div>
           <div>
-            <div className="text-gray-500">MP</div>
-            <div className="font-mono text-blue-400">
+            <div className="text-slate-500">MP</div>
+            <div className="font-mono text-indigo-300">
               ${chain.max_pain?.toFixed(0) ?? "—"}
             </div>
           </div>
@@ -288,18 +288,18 @@ export default function Signals() {
       )}
 
       {isLoading && (
-        <div className="py-12 text-center text-gray-500">סורק...</div>
+        <div className="py-12 text-center text-slate-500">סורק...</div>
       )}
 
       {isError && (
-        <div className="mx-4 rounded-2xl border border-gray-700 bg-gray-900 p-5 text-center">
+        <div className="mx-4 card p-5 text-center">
           <div className="mb-2 text-2xl">⚠️</div>
-          <div className="text-sm text-gray-400">שגיאה בטעינה. נסה שנית.</div>
+          <div className="text-sm text-slate-400">שגיאה בטעינה. נסה שנית.</div>
         </div>
       )}
 
       {!isLoading && !errKey && signals.length === 0 && (
-        <div className="py-12 text-center text-gray-500">
+        <div className="py-12 text-center text-slate-500">
           <div className="mb-2 text-3xl">🔍</div>
           <div>אין סיגנלים כרגע</div>
           <div className="mt-2 text-xs">נסה להוריד ניקוד מינימלי</div>
@@ -313,13 +313,13 @@ export default function Signals() {
       </div>
 
       {!isLoading && signals.length > 0 && (
-        <div className="py-4 text-center text-xs text-gray-600">
+        <div className="py-4 text-center text-xs text-slate-600">
           {signals.length} סיגנלים · מתרענן כל 2 דק'
         </div>
       )}
 
       {!isLoading && data?.source && (
-        <div className="py-1 text-center text-xs text-gray-600">
+        <div className="py-1 text-center text-xs text-slate-600">
           מקור:{" "}
           {data.source === "yfinance_unusual_options"
             ? "yfinance Options Activity"

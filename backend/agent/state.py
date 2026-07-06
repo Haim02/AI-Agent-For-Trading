@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any, Optional, TypedDict
 
 
-MAX_ITERATIONS = 10
+# Each iteration = one Claude call. 6 keeps latency/cost sane while still
+# allowing multi-step research (e.g. GEX → flow → IV → answer).
+MAX_ITERATIONS = 6
 
 
 class AgentState(TypedDict, total=False):
@@ -17,6 +19,11 @@ class AgentState(TypedDict, total=False):
     current_strategy: Optional[str]
 
     market_context: dict[str, Any]
+    memory_context: str  # rich Hebrew context block from ContextBuilder
+
+    # Native Anthropic tool-use conversation thread (assistant/tool_result turns)
+    claude_messages: list[dict[str, Any]]
+    pending_tools: list[dict[str, Any]]
 
     scan_results: Optional[list[dict[str, Any]]]
     analysis_results: Optional[dict[str, Any]]
@@ -40,6 +47,9 @@ def initial_state(user_message: str, session_id: str = "default") -> AgentState:
         current_ticker=None,
         current_strategy=None,
         market_context={},
+        memory_context="",
+        claude_messages=[],
+        pending_tools=[],
         scan_results=None,
         analysis_results=None,
         strategy_params=None,

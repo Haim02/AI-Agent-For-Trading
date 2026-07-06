@@ -55,18 +55,18 @@ export default function Narrative() {
   const errKey = data?.error;
 
   return (
-    <div className="min-h-screen bg-gray-950 pb-24 text-white">
+    <div className="min-h-screen bg-slate-950 pb-24 text-white">
       <div className="px-4 pt-5 pb-3">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold">ניתוח AI מלא</h1>
-            <p className="mt-1 text-sm text-gray-500">
+            <p className="mt-1 text-sm text-slate-500">
               ניתוח טקסטואלי של מבנה השוק
             </p>
           </div>
           <button
             onClick={() => setRefreshKey((k) => k + 1)}
-            className="rounded-xl bg-gray-800 p-2.5 text-lg"
+            className="rounded-xl bg-slate-800 p-2.5 text-lg"
             aria-label="רענן"
           >
             🔄
@@ -74,7 +74,7 @@ export default function Narrative() {
         </div>
 
         {data?.spot_price ? (
-          <div className="mt-2 font-mono text-xl font-bold text-blue-400">
+          <div className="mt-2 font-mono text-xl font-bold text-indigo-300">
             ${data.spot_price.toLocaleString()}
           </div>
         ) : null}
@@ -86,7 +86,7 @@ export default function Narrative() {
             key={t}
             onClick={() => setTicker(t)}
             className={`flex-none rounded-full px-4 py-1.5 text-sm font-semibold ${
-              ticker === t ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"
+              ticker === t ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"
             }`}
           >
             {t}
@@ -97,8 +97,8 @@ export default function Narrative() {
       {isLoading && (
         <div className="py-16 text-center">
           <div className="mb-3 text-4xl">🧠</div>
-          <div className="text-gray-400">מייצר ניתוח עבור {ticker}...</div>
-          <div className="mt-2 text-xs text-gray-600">~15 שניות</div>
+          <div className="text-slate-400">מייצר ניתוח עבור {ticker}...</div>
+          <div className="mt-2 text-xs text-slate-600">~15 שניות</div>
         </div>
       )}
 
@@ -108,7 +108,7 @@ export default function Narrative() {
           <div className="mb-3 text-sm text-red-300">שגיאה בטעינה. נסה שנית.</div>
           <button
             onClick={() => setRefreshKey((k) => k + 1)}
-            className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white"
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-sm text-white"
           >
             נסה שוב
           </button>
@@ -123,7 +123,7 @@ export default function Narrative() {
                 <span className="text-xl">{s.icon}</span>
                 <span className="text-sm font-bold text-white">{s.label}</span>
               </div>
-              <p className="text-sm leading-relaxed text-gray-200">
+              <p className="text-sm leading-relaxed text-slate-200">
                 {sections[s.key] || "—"}
               </p>
             </div>

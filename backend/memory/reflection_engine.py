@@ -13,7 +13,7 @@ from memory.short_term import ShortTermMemory
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-5"
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 MAX_TOKENS = 2048
 
 REFLECT_DAY_PROMPT = (

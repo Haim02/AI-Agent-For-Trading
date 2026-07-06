@@ -15,14 +15,10 @@ webdriver-manager
 beautifulsoup4
 pandas
 requests
-langchain
-langchain-anthropic
-langchain-openai
 langgraph
 anthropic
 finnhub-python
 websockets
-aiohttp
 pytz
 playwright>=1.40.0
 flashalpha>=0.2.0

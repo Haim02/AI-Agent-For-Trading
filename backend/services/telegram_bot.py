@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 from collections import defaultdict
-from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -17,10 +16,8 @@ from telegram.ext import (
 )
 
 from agent.autonomous_agent import AutonomousAgent, get_autonomous_agent
-from analytics.gex_calculator import GEXCalculator
 from db.connection import get_db
 from memory.long_term import LongTermMemory
-from scrapers.menthorq_scraper import MenthorQScraper
 from utils.text_clean import clean_response
 from zoneinfo import ZoneInfo
 
@@ -33,7 +30,8 @@ HELP_TEXT = (
     "/start — אתחול שיחה\n"
     "/scan — סריקת שוק אוטונומית\n"
     "/positions — פוזיציות פתוחות\n"
-    "/gex — GEX נוכחי מ-MenthorQ\n"
+    "/gex [TICKER] — ניתוח GEX מלא (ברירת מחדל: SPX)\n"
+    "/dex [TICKER] — תמיכות/התנגדויות Delta (DEX)\n"
     "/levels [TICKER] — רמות GEX מ-FlashAlpha\n"
     "/narrative [TICKER] — ניתוח AI מלא לנכס\n"
     "/signals [TICKER] [SCORE] — סיגנלי Flow חזקים\n"
@@ -138,41 +136,32 @@ async def cmd_positions(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None
     await _send(update, "\n".join(lines))
 
 
-async def cmd_gex(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await _send(update, "⏳ מושך נתוני GEX...", parse=False)
+async def cmd_gex(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """``/gex [TICKER]`` – full GEX analysis (FlashAlpha → UW → Massive → yfinance)."""
+    ticker = (ctx.args[0].upper() if ctx.args else "SPX")
+    await _send(update, f"⏳ מושך נתוני GEX ל-{ticker}...", parse=False)
 
-    def _scrape() -> dict:
-        with MenthorQScraper(headless=True) as scraper:
-            return asdict(scraper.scrape_gex_data())
-
-    try:
-        menthorq = await asyncio.to_thread(_scrape)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("cmd_gex: MenthorQ failed")
-        menthorq = {"note": str(exc)}
+    from analytics.gex_engine import GEXEngine
 
     try:
-        calc = await asyncio.to_thread(GEXCalculator().get_key_levels, "SPY")
+        data = await GEXEngine().get_full_gex_analysis(ticker)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("cmd_gex: calculator failed")
-        calc = {"error": str(exc)}
+        logger.exception("cmd_gex failed")
+        await _send(update, f"⚠️ שגיאה בניתוח GEX: {exc}", parse=False)
+        return
 
-    lines = [
-        "⚡ *GEX נוכחי*",
-        f"Regime: {menthorq.get('regime', '—')}",
-        f"Spot: {menthorq.get('spot_price', '—')}",
-        f"Call Wall: {menthorq.get('call_wall', '—')}",
-        f"Put Wall: {menthorq.get('put_wall', '—')}",
-        f"Gamma Flip: {menthorq.get('gamma_flip_level', '—')}",
-        "",
-        "*חישוב עצמי (SPY):*",
-        f"Regime: {calc.get('regime', '—')} | Zero-DTE Safe: {calc.get('zero_dte_safe', '—')}",
-        f"Call Resistance: {calc.get('call_resistance_levels', [])}",
-        f"Put Support: {calc.get('put_support_levels', [])}",
-    ]
-    if menthorq.get("note"):
-        lines.append(f"\n📝 {menthorq['note']}")
-    await _send(update, "\n".join(lines))
+    if "error" in data:
+        await _send(
+            update,
+            f"לא ניתן לקבל נתוני GEX ל-{ticker}.\nשגיאה: {data['error']}",
+            parse=False,
+        )
+        return
+
+    body = data.get("analysis_hebrew") or "—"
+    if data.get("warning") == "estimated_levels":
+        body += "\n\n⚠️ שים לב: נתונים משוערים בלבד"
+    await _send_long(update, body)
 
 
 async def cmd_summary(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -331,6 +320,22 @@ async def cmd_levels(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _send(update, result.get("analysis_hebrew") or "—", parse=False)
 
 
+async def cmd_dex(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """``/dex [TICKER]`` – current Delta-exposure support/resistance walls."""
+    ticker = (ctx.args[0].upper() if ctx.args else "SPX")
+    await _send(update, f"🧲 מנתח רמות Delta ל-{ticker}...", parse=False)
+
+    from services.dex_monitor import DexMonitor
+
+    try:
+        monitor = DexMonitor()
+        levels = await monitor.get_dex_levels(ticker)
+        await _send(update, monitor.format_hebrew(levels), parse=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("cmd_dex failed")
+        await _send(update, f"⚠️ שגיאה: {exc}", parse=False)
+
+
 async def cmd_learn(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     raw = " ".join(ctx.args or []).strip()
     if not raw:
@@ -428,6 +433,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("positions", cmd_positions))
     app.add_handler(CommandHandler("gex", cmd_gex))
+    app.add_handler(CommandHandler("dex", cmd_dex))
     app.add_handler(CommandHandler("summary", cmd_summary))
     app.add_handler(CommandHandler("levels", cmd_levels))
     app.add_handler(CommandHandler("narrative", cmd_narrative))

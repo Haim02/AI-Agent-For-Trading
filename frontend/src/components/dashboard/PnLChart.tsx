@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
-  Line,
-  LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -37,74 +38,115 @@ export default function PnLChart() {
       .slice(0, 30)
       .reverse()
       .map((entry) => ({
-        date: entry.date,
+        date: entry.date?.slice(5), // MM-DD
         pnl: Number(entry.daily_pnl ?? 0),
       }));
   }, [data]);
 
-  const last = chartData[chartData.length - 1]?.pnl ?? 0;
-  const trendColor = last >= 0 ? "#34d399" : "#f87171";
+  const total = useMemo(
+    () => chartData.reduce((sum, d) => sum + d.pnl, 0),
+    [chartData],
+  );
+  const isUp = total >= 0;
+  const stroke = isUp ? "#34d399" : "#fb7185";
+  const gradientId = isUp ? "pnlGradUp" : "pnlGradDown";
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 shadow-lg lg:p-5">
+    <div className="card p-4 lg:p-5 animate-fade-up">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">רווח/הפסד יומי – 30 ימים אחרונים</h2>
-        <span className="hidden text-xs text-slate-400 lg:inline">
-          מנוקד לפי יומן המסחר
+        <div>
+          <h2 className="section-title">רווח/הפסד יומי</h2>
+          <p className="text-[11px] text-slate-500">30 ימים אחרונים · לפי יומן המסחר</p>
+        </div>
+        <span
+          className={`badge border ${
+            isUp
+              ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-300"
+              : "border-rose-400/20 bg-rose-500/10 text-rose-300"
+          }`}
+        >
+          <span className="num">
+            {new Intl.NumberFormat("en-US", {
+              style: "currency",
+              currency: "USD",
+              maximumFractionDigits: 0,
+              signDisplay: "exceptZero",
+            }).format(total)}
+          </span>
+          סה"כ
         </span>
       </div>
-      <div className="h-[200px] w-full lg:h-[300px]">
+
+      <div className="h-[200px] w-full lg:h-[300px]" dir="ltr">
         {isLoading ? (
-          <div className="flex h-full items-center justify-center text-sm text-slate-400">
+          <div className="flex h-full items-center justify-center text-sm text-slate-500">
             טוען…
           </div>
         ) : chartData.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-slate-400">
-            אין רשומות יומן עדיין
+          <div className="flex h-full flex-col items-center justify-center gap-1 text-sm text-slate-500">
+            <span>אין רשומות יומן עדיין</span>
+            <span className="text-xs text-slate-600">
+              הגרף יתמלא אוטומטית אחרי ימי מסחר
+            </span>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart
+            <AreaChart
               data={chartData}
               margin={{ top: 10, right: 8, bottom: 0, left: 0 }}
             >
-              <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
+              <defs>
+                <linearGradient id="pnlGradUp" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#34d399" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#34d399" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="pnlGradDown" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#fb7185" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#fb7185" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="date"
-                stroke="#64748b"
+                stroke="#334155"
                 fontSize={isDesktop ? 11 : 9}
-                tick={isDesktop ? { fill: "#94a3b8" } : false}
+                tick={isDesktop ? { fill: "#64748b" } : false}
+                tickLine={false}
+                axisLine={false}
                 hide={!isDesktop}
               />
               <YAxis
-                stroke="#64748b"
+                stroke="#334155"
                 fontSize={isDesktop ? 11 : 9}
-                tick={{ fill: "#94a3b8" }}
-                width={isDesktop ? 40 : 32}
+                tick={{ fill: "#64748b" }}
+                tickLine={false}
+                axisLine={false}
+                width={isDesktop ? 44 : 34}
+                tickFormatter={(v: number) => `$${v}`}
               />
+              <ReferenceLine y={0} stroke="#475569" strokeDasharray="4 4" />
               <Tooltip
                 contentStyle={{
-                  background: "#0f172a",
+                  background: "rgba(6, 9, 19, 0.95)",
                   border: "1px solid #1e293b",
-                  borderRadius: 8,
+                  borderRadius: 10,
                   color: "#e2e8f0",
                   fontSize: 12,
+                  boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
                 }}
-                formatter={(value: any) => [
-                  `$${Number(value).toFixed(0)}`,
-                  "P&L",
-                ]}
+                formatter={(value) => [`$${Number(value ?? 0).toFixed(0)}`, "P&L"]}
                 labelFormatter={(label) => `תאריך: ${label}`}
               />
-              <Line
+              <Area
                 type="monotone"
                 dataKey="pnl"
-                stroke={trendColor}
-                strokeWidth={2}
+                stroke={stroke}
+                strokeWidth={2.5}
+                fill={`url(#${gradientId})`}
                 dot={false}
-                activeDot={{ r: 4 }}
+                activeDot={{ r: 4, strokeWidth: 0 }}
               />
-            </LineChart>
+            </AreaChart>
           </ResponsiveContainer>
         )}
       </div>
